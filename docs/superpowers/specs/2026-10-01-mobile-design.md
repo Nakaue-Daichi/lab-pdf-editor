@@ -204,8 +204,40 @@ PDF.js `web/text_layer_builder.js`（v6.3.289、Apache-2.0）の `#bindMouse` �
 
 ## 調査の要点（出典）
 
-（調査の完了後に追記）
+2026-10-01 に技術（ブラウザの挙動）と UX（既存のモバイル PDF 注釈アプリ・指針）の 2 方向で調べた要点。
+
+| 何が分かったか | 設計への効き方 | 出典 |
+|---|---|---|
+| タッチの選択では、ハンドルを動かした後に `mouseup`/`pointerup`/`touchend` が来ない。来るのは `selectionchange` だけ | 止まって 300ms で確定（Hypothesis はマウス 100ms） | [PDF.js #17923](https://github.com/mozilla/pdf.js/pull/17923)、[Hypothesis SelectionObserver](https://github.com/hypothesis/client/blob/main/src/annotator/selection-observer.ts)、[R. Knight の実測メモ](https://gist.github.com/robertknight/ad9f1bca8280b3fa325817aa3ed9935c) |
+| iOS は選択の外のボタンをタップすると click の時点で選択が消えている | 確定した選択を保持し、押し始めの値で作る | [Apple Developer Forums 690918](https://developer.apple.com/forums/thread/690918) |
+| OS の選択メニューは選択の上（無ければ下）に出て、消せない | 「＋ コメント」は選択のそばに出さず下へ | 同上・[MDN -webkit-touch-callout](https://developer.mozilla.org/en-US/docs/Web/CSS/-webkit-touch-callout) |
+| 選択補助（`.endOfContent`）は `TextLayerBuilder` 側にあり、`TextLayer` だけでは入らない。iOS の選択の乱れは本家でも未解決 | 移植した。引用をカードに出して確かめられるように | [text_layer_builder.js v6.3.289](https://github.com/mozilla/pdf.js/blob/v6.3.289/web/text_layer_builder.js)、[#15691](https://github.com/mozilla/pdf.js/issues/15691) |
+| pdfjs-dist は本家ビューアのピンチ処理 `TouchManager` を公開している。iOS は `user-scalable=no` を無視し、`touch-action` は iOS 13 から | `TouchManager` を使い、本文に `touch-action: pan-x pan-y`・`gesturestart` を止める | [touch_manager.js](https://github.com/mozilla/pdf.js/blob/v6.3.289/src/display/touch_manager.js)、[MDN touch-action](https://developer.mozilla.org/en-US/docs/Web/CSS/touch-action) |
+| PDF.js はモバイルでキャンバス 1 枚 5,242,880 px、ページは 10 枚（`max(10, 2×見えている数+1)`）。iOS は合計の上限が撤廃され、超えるとタブごと落ちる | `renderBudget.ts` の値 | [app_options.js](https://github.com/mozilla/pdf.js/blob/v6.3.289/web/app_options.js)、[WebKit CanvasBase.cpp](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/html/CanvasBase.cpp) |
+| 16px 未満の入力欄にフォーカスすると WebKit は 16 ÷ font-size 倍に拡大する | タッチ端末の入力欄は 16px | [WebKit WKContentViewInteraction.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/ios/WKContentViewInteraction.mm) |
+| iOS も Android Chrome 108 以降も、キーボードで縮むのは visual viewport だけ（Android の既定は resizes-visual） | `--kb = innerHeight − vv.height − vv.offsetTop` でシートを持ち上げる | [Chrome: viewport resize behavior](https://developer.chrome.com/blog/viewport-resize-behavior)、[MDN Visual Viewport](https://developer.mozilla.org/en-US/docs/Web/API/Visual_Viewport_API) |
+| 共有のユーザー操作の有効期間は WebKit・Chromium とも 5 秒。キャンセルは `AbortError`。Firefox はファイルを共有できない | PDF を作ってから `share`。キャンセルは下書きを残す | [MDN Navigator.share](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share)、[Chromium user_activation_state.h](https://github.com/chromium/chromium/blob/main/third_party/blink/public/common/frame/user_activation_state.h) |
+| iOS Safari は 7 日間そのサイトで操作が無いと IndexedDB も localStorage も消す。`persist()` はホーム画面のアプリなど以外では通らない | README に「保存した PDF が正」 | [MDN StorageManager.persist](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist) |
+| Box は「なぞって指を離すとコメント欄が自動で開く」。Zotero iOS には「離すと範囲がずれる」「ポップアップが本文を隠す」不満 | 押したらすぐ入力欄。確定は「＋ コメント」を押したとき | [Box iOS annotations](https://docs.box.com/en/box-mobile/box-for-ios/ios-annotations-highlight-region-and-highlight-text)、[Zotero forums 100203](https://forums.zotero.org/discussion/100203/ios-highlight-moves-after-selection) |
+| Material 3: 主領域と共存する standard（非モーダル）シート、半分の既定比 0.5、ハンドルの触れる範囲 48dp。Apple: medium/large の 2 段、作成画面は全高だけ | 半分／全高の非モーダルシート、書くときは全高 | [M3 BottomSheet](https://github.com/material-components/material-components-android/blob/master/docs/components/BottomSheet.md)、[HIG Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets) |
+| タッチターゲット 44pt（HIG）／48dp（M3）。片手持ちが 49%、操作の 75% は親指。頻度の高い操作は画面下の中央寄り | 下部バーに戻す・付箋・コメント・保存、まれな操作は「…」 | [HIG Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility)、[A List Apart: How We Hold Our Gadgets](https://alistapart.com/article/how-we-hold-our-gadgets/) |
+| M3 の動き: 250〜400ms、emphasized decelerate `cubic-bezier(0.05, 0.7, 0.1, 1)` | シートの開閉 300ms / 200ms | [M3 Motion](https://github.com/material-components/material-components-android/blob/master/docs/theming/Motion.md) |
 
 ## 実装後の差分
 
-（実装しながら判明し、設計から変えた点を理由とともに書く）
+実装しながら判明し、設計から変えた点。理由を添える。
+
+- **下部バーは 4 項目（戻す・付箋・コメント・保存）にし、やり直すは「…」へ**。UX 調査で「下部は少数の文字ラベル付き」「取り消しはメニューの奥に隠さない（頻度が高い）」が出たため、戻すだけを下に残した。
+- **「＋ コメント」は、スマホ用画面では下部バーの上に浮かせず、下部バーそのものを「解除／＋ コメント」に差し替える**。浮かせると本文の下端を隠す。iPad などスマホ用画面でない指の操作では、本文の下端中央に固定して出す。
+- **シートは下部バーを覆わず、その上に置く**。一覧を見ながら戻す・保存を押せるように。入力中だけ下部バーを隠し、シートをキーボードの上まで伸ばす。
+- **「書くときは全高」は入力中だけにし、新しいコメントを書き終えたら（一覧の外を触る・キーボードの「完了」）開く前の段へ戻す**。添削で何十件も続けて付けるとき、毎回シートを閉じる手間を無くすため。一覧の中のボタンを押してフォーカスが外れたとき（iOS はボタンにフォーカスを移さない）は戻さない。
+- **空のまま書き終えたら「ハイライトだけ残しました［取り消す］」（付箋は「空の付箋を残しました」）を出す**。UX 調査の提案。
+- **ピンチは CSS の変形ではなく、指の動きごとにページの寸法を変え、離したら描き直す**（PDF.js 本家と同じやり方）。変形で伸ばすとスクロール量とずれ、縮小中にブラウザがスクロール位置を丸めるため。`pinch.ts` は作らず、pdfjs-dist の `TouchManager` を `PdfViewer` から使った。ハイライト・付箋はページに対する % で置き、倍率が変わっても描き直さない。
+- **描き直しは新しいキャンバスに描いてから差し替える**。キャンバスの寸法を変えると中身が消えるので、倍率を変えた直後に白く抜けていた。描く前のキャンバスは 0×0 にした（既定の 300×150 を全ページ分持っていた）。
+- **スマホ用画面では「幅に合わせる」をページごとにする**。サンプルの 3 ページ目のような横置きが 1 枚あるだけで、縦のページが幅の 7 割（375px で 254px）に縮んでいた。デスクトップは今まで通り最も広いページに合わせる。
+- **選択の矩形はテキストノードだけから取る**。移植した `.endOfContent` が範囲の中に入ると、`range.getClientRects()` にページ全体の矩形（591×837）が混ざることを実測した（ハイライトがページ全体になる）。
+- **ツールバーの `overflow: hidden` を外した**。「Markdown ▾」のメニューが切れて押せなかった（公開中の版でも再現）。はみ出しは幅ごとの畳み込みで防ぐ。
+- **`interactive-widget` は付けなかった**。Android Chrome の既定（resizes-visual）なら iOS と同じく visual viewport だけが縮み、`--kb` の 1 つの仕組みで両方を扱える。
+- **配信物にライセンス表示を残す**（`vite.config.ts` の `comments.legal`）。Vite の既定ではすべて消え、写したアイコンの ISC/MIT の条件を満たせなかった。
+- **描画済みキャンバスの上限は「6（タッチ）か 2×見えている枚数+1 の大きい方」だが、表示付近のページは捨てないので 7 枚になることがある**（60 ページの PDF で実測 6〜7 枚・最大 12.5 MP）。品質の基準の「6 枚まで」はこの意味に読み替える。
+- **動作の下限は iOS / Safari 17.4・Chrome 119**。pdfjs-dist 6 自体が `Promise.withResolvers`・`AbortSignal.any` を使っているため（`TouchManager` を足しても下限は上がらない）。
