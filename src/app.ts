@@ -4,6 +4,7 @@ import './styles.css';
 import { downloadBytes, downloadText } from './export/download';
 import { markdownFileName, reviewedFileName } from './export/filenames';
 import { toMarkdown } from './export/markdown';
+import { canShareFiles, deliverFile } from './export/share';
 import { mergeComments } from './model/merge';
 import { ReviewStore } from './model/store';
 import type { Comment } from './model/types';
@@ -82,6 +83,9 @@ export function startApp(root: HTMLElement): void {
     undo,
     redo,
   });
+
+  // 下部バーの保存の絵: 共有シートで渡せる端末なら「共有」、それ以外は「ダウンロード」
+  toolbar.setSaveIcon(isTouchDevice() && canShareFiles(navigator) ? 'share' : 'download');
 
   const main = document.createElement('div');
   main.className = 'app-main';
@@ -399,9 +403,12 @@ export function startApp(root: HTMLElement): void {
     const name = reviewedFileName(current.fileName);
     try {
       const out = await writeAnnotations(current.bytes, store.doc.comments);
-      downloadBytes(out, name);
+      // スマホ・タブレットは共有シート（Slack やファイルへそのまま渡せる）。デスクトップは今まで通りダウンロード
+      const result = await deliverFile(out, name, 'application/pdf', { preferShare: isTouchDevice(), nav: navigator, download: downloadBytes });
+      if (result === 'cancelled') return; // 共有シートを閉じた: 渡していないので下書きは残す
       await deleteDraft(current.hash).catch(() => undefined);
-      toast(`${name} を保存しました（コメント ${store.doc.comments.length} 件）`);
+      const count = store.doc.comments.length;
+      toast(result === 'shared' ? `${name} を共有しました（コメント ${count} 件）` : `${name} を保存しました（コメント ${count} 件）`);
     } catch (err) {
       toast(`保存に失敗しました: ${errorMessage(err)}`, 'error');
     }
