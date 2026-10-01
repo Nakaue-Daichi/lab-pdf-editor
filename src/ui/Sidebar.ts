@@ -106,7 +106,7 @@ export class Sidebar {
    * ページ全体が動かないよう preventScroll にして、一覧の中だけをスクロールする。
    */
   focusComment(id: string): void {
-    const textarea = this.listEl.querySelector<HTMLTextAreaElement>(`[data-id="${id}"] textarea`);
+    const textarea = this.listEl.querySelector<HTMLTextAreaElement>(`[data-id="${CSS.escape(id)}"] textarea`);
     if (textarea) {
       textarea.focus({ preventScroll: true });
       this.scrollCardIntoView(id);
@@ -211,7 +211,7 @@ export class Sidebar {
       <ul class="cc-replies">
         ${c.replies
           .map(
-            (r) => `<li data-reply-id="${r.id}"><span class="cc-reply-author">${escapeHtml(r.author)}</span> ${escapeHtml(r.text)}
+            (r) => `<li data-reply-id="${escapeHtml(r.id)}"><span class="cc-reply-author">${escapeHtml(r.author)}</span> ${escapeHtml(r.text)}
               <button type="button" class="cc-icon cc-icon-small" data-act="delete-reply" title="返信を削除">✕</button></li>`,
           )
           .join('')}
@@ -272,7 +272,7 @@ export class Sidebar {
   }
 
   private scrollCardIntoView(id: string): void {
-    const card = this.listEl.querySelector<HTMLElement>(`[data-id="${id}"]`);
+    const card = this.listEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
     if (!card) return;
     const listRect = this.listEl.getBoundingClientRect();
     const rect = card.getBoundingClientRect();
@@ -281,7 +281,7 @@ export class Sidebar {
 
   private refreshTime(id: string): void {
     const c = this.store.find(id);
-    const time = this.listEl.querySelector<HTMLElement>(`[data-id="${id}"] [data-role="time"]`);
+    const time = this.listEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"] [data-role="time"]`);
     if (c && time) time.textContent = formatTime(c.modifiedAt);
   }
 }
