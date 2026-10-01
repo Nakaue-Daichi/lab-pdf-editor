@@ -1,5 +1,6 @@
 // ページ上のハイライトと付箋アイコンを描く。ハイライトはクリックを拾わない（文字選択の邪魔をしない）ので、
 // クリック判定は PdfViewer 側で hitTestHighlight を使って行う。
+// 位置と大きさはページに対する % で置く。ピンチ中に倍率が変わっても描き直さずにページと一緒に伸び縮みする。
 import type { PageViewport } from 'pdfjs-dist';
 import type { Comment } from '../model/types';
 import { pdfRectToCss } from './coords';
@@ -15,6 +16,7 @@ export function renderOverlay(
   onSelectNote: (id: string) => void,
 ): void {
   const fragment = document.createDocumentFragment();
+  const pct = (value: number, total: number): string => `${(value / total) * 100}%`;
   for (const c of comments) {
     const selected = c.id === selectedId;
     if (c.anchor.kind === 'highlight') {
@@ -22,7 +24,7 @@ export function renderOverlay(
         const { left, top, width, height } = pdfRectToCss(quad, viewport);
         const div = document.createElement('div');
         div.className = selected ? 'pv-highlight is-selected' : 'pv-highlight';
-        div.style.cssText = `left:${left}px;top:${top}px;width:${width}px;height:${height}px;background:${c.color}`;
+        div.style.cssText = `left:${pct(left, viewport.width)};top:${pct(top, viewport.height)};width:${pct(width, viewport.width)};height:${pct(height, viewport.height)};background:${c.color}`;
         div.dataset.id = c.id;
         fragment.append(div);
       }
@@ -32,8 +34,8 @@ export function renderOverlay(
     const button = document.createElement('button');
     button.type = 'button';
     button.className = selected ? 'pv-note is-selected' : 'pv-note';
-    button.style.left = `${vx}px`;
-    button.style.top = `${vy}px`;
+    button.style.left = pct(vx, viewport.width);
+    button.style.top = pct(vy, viewport.height);
     button.style.setProperty('--note-color', c.color);
     button.title = `${c.author}: ${c.text || '（本文なし）'}`;
     button.dataset.id = c.id;

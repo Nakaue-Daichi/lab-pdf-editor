@@ -299,7 +299,30 @@ summary.tb-btn[disabled] {
   position: absolute;
   inset: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg);
+  /* 2 本指の拡大はアプリが受け持つ（src/viewer/PdfViewer.ts のピンチ）。1 本指のスクロールと文字の選択はブラウザのまま */
+  touch-action: pan-x pan-y;
+}
+/* ページ位置（「3 / 12」）。スクロール中だけ出す */
+.pv-pageind {
+  position: absolute;
+  z-index: 20;
+  top: 10px;
+  right: 22px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(29, 29, 31, 0.72);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.pv-pageind.is-visible {
+  opacity: 1;
+  transition-duration: 0.1s;
 }
 .pv-viewer.note-mode,
 .pv-viewer.note-mode .textLayer span {
@@ -329,6 +352,9 @@ summary.tb-btn[disabled] {
   position: absolute;
   inset: 0;
   display: block;
+  /* ページの寸法に合わせて伸び縮みさせる。倍率を変えた直後は描き直すまで今の絵を伸ばして見せる */
+  width: 100%;
+  height: 100%;
 }
 .pv-page .textLayer {
   z-index: 2;

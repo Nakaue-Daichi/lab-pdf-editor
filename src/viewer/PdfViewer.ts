@@ -1,40 +1,77 @@
-// 連続スクロールのページ列。表示に近いページだけ描く。オーバーレイの再描画とクリックの座標変換も担う。
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+// 連続スクロールのページ列。表示に近いページだけ描き、遠いページの描画は捨てる（iOS はキャンバスが多すぎると落ちる）。
+// 倍率を変えるとき（セレクト・幅合わせ・指 2 本のピンチ）は、表示の中央（ピンチは指の間）の点が同じ画面位置に残るようにする。
+// オーバーレイの再描画とクリックの座標変換も担う。
+import { TouchManager, type PDFDocumentProxy } from 'pdfjs-dist';
 import type { Comment } from '../model/types';
 import { anchorRect } from '../pdf/annotations';
 import { pdfRectToCss } from './coords';
 import { renderOverlay } from './OverlayLayer';
-import { PageView } from './PageView';
+import { PageView, type CanvasLimits } from './PageView';
+import {
+  MAX_CANVAS_DIM,
+  MAX_CANVAS_DIM_TOUCH,
+  MAX_CANVAS_PIXELS,
+  MAX_CANVAS_PIXELS_TOUCH,
+  pageIndexAt,
+  pagesToRelease,
+  RENDER_CACHE_BASE,
+  RENDER_CACHE_BASE_TOUCH,
+  renderCacheSize,
+} from './renderBudget';
+import { anchorAt, clampScale, MIN_SCALE, percentToScale, scaleToPercent, scrollForAnchor, type Anchor } from './zoom';
 
 /** 'fit-width' か百分率。100% = 96dpi 換算（1pt = 1.333px）。 */
 export type ZoomMode = 'fit-width' | number;
 
-const CSS_PX_PER_PT = 96 / 72;
-const MIN_SCALE = 0.25;
+export interface PdfViewerOptions {
+  /** 指で操作する端末か（描画の上限を小さくする） */
+  touch: boolean;
+}
+
+/** ページ位置（「3 / 12」）を消すまでの時間 */
+const INDICATOR_MS = 1200;
 
 export class PdfViewer {
   readonly el: HTMLDivElement;
   private readonly pagesEl: HTMLDivElement;
+  private readonly indicatorEl: HTMLDivElement;
   private pageViews: PageView[] = [];
   private zoomMode: ZoomMode = 'fit-width';
   private readonly observer: IntersectionObserver;
   private resizeTimer = 0;
+  private indicatorTimer = 0;
+  private scrollFrame = 0;
   private comments: readonly Comment[] = [];
   private selectedId: string | null = null;
   private fitEachPage = false;
+  private readonly limits: CanvasLimits;
+  private readonly cacheBase: number;
+  /** 指 2 本で操作している間の倍率（0 = 操作していない）。この間は描き直さず寸法だけ変える */
+  private pinchScale = 0;
+  private pinched = false;
 
   /** ページ上のクリック（付箋アイコン以外）。point は PDF ユーザ空間 */
   onPageClick: ((pageIndex: number, point: [number, number], event: MouseEvent) => void) | null = null;
   /** 付箋アイコンのクリック */
   onSelectNote: ((id: string) => void) | null = null;
+  /** ピンチで倍率が変わった（ツールバーの表示を合わせる） */
+  onZoomChange: ((mode: ZoomMode) => void) | null = null;
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, options: PdfViewerOptions) {
+    this.limits = options.touch
+      ? { maxPixels: MAX_CANVAS_PIXELS_TOUCH, maxDim: MAX_CANVAS_DIM_TOUCH }
+      : { maxPixels: MAX_CANVAS_PIXELS, maxDim: MAX_CANVAS_DIM };
+    this.cacheBase = options.touch ? RENDER_CACHE_BASE_TOUCH : RENDER_CACHE_BASE;
+
     this.el = document.createElement('div');
     this.el.className = 'pv-viewer';
     this.pagesEl = document.createElement('div');
     this.pagesEl.className = 'pv-pages';
     this.el.append(this.pagesEl);
-    parent.append(this.el);
+    this.indicatorEl = document.createElement('div');
+    this.indicatorEl.className = 'pv-pageind';
+    this.indicatorEl.setAttribute('aria-hidden', 'true');
+    parent.append(this.el, this.indicatorEl);
 
     this.observer = new IntersectionObserver(
       (entries) => {
@@ -47,6 +84,7 @@ export class PdfViewer {
       { root: this.el, rootMargin: '100% 0px' },
     );
     this.pagesEl.addEventListener('click', (event) => this.handleClick(event));
+    this.el.addEventListener('scroll', () => this.onScroll(), { passive: true });
     // 表示領域の幅が変わったら「幅に合わせる」を計算し直す。ウィンドウのリサイズだけでなく、
     // 非表示（幅 0）で開いてから表示された場合や、サイドバー幅の変化にも追従する。
     // 高さだけの変化（スマホのキーボード・アドレスバーの出し入れ）では描き直さない。
@@ -59,6 +97,21 @@ export class PdfViewer {
       window.clearTimeout(this.resizeTimer);
       this.resizeTimer = window.setTimeout(() => this.applyScale(), 100);
     }).observe(this.el);
+
+    // 指 2 本のピンチ。PDF.js 本家のビューアと同じ TouchManager を使う（指 2 本のときだけ touchmove を preventDefault し、
+    // 1 本の操作＝スクロールと文字の選択はブラウザに任せる）。styles.css で touch-action: pan-x pan-y も付けている。
+    new TouchManager({
+      container: this.el,
+      isPinchingDisabled: () => this.pageViews.length === 0,
+      onPinchStart: () => this.beginPinch(),
+      onPinching: (origin: [number, number], prevDistance: number, distance: number, dx: number, dy: number) =>
+        this.pinch(origin, distance / prevDistance, dx, dy),
+      onPanning: (dx: number, dy: number) => this.panBy(dx, dy),
+      onPinchEnd: () => this.endPinch(),
+      signal: new AbortController().signal,
+    });
+    // iOS Safari は本文の上の 2 本指でもページ全体を拡大しようとする（gesture* は Safari だけのイベント）
+    this.el.addEventListener('gesturestart', (event) => event.preventDefault());
   }
 
   get zoom(): ZoomMode {
@@ -83,7 +136,7 @@ export class PdfViewer {
     this.clear();
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
     const scales = this.computeScales(pages.map((p) => p.getViewport({ scale: 1 }).width));
-    this.pageViews = pages.map((page, index) => new PageView(index, page, scales[index] as number));
+    this.pageViews = pages.map((page, index) => new PageView(index, page, scales[index] as number, this.limits));
     for (const pv of this.pageViews) {
       this.pagesEl.append(pv.el);
       this.observer.observe(pv.el);
@@ -118,7 +171,10 @@ export class PdfViewer {
     if (!pv) return;
     const css = pdfRectToCss(anchorRect(comment.anchor), pv.viewport);
     const top = pv.el.offsetTop + css.top - this.el.clientHeight * topFraction;
-    this.el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    const left = pv.el.offsetLeft + css.left + css.width / 2 - this.el.clientWidth / 2;
+    // 横は、拡大していてコメントが画面の外にあるときだけ送る
+    const visibleX = pv.el.offsetLeft + css.left >= this.el.scrollLeft && pv.el.offsetLeft + css.left + css.width <= this.el.scrollLeft + this.el.clientWidth;
+    this.el.scrollTo({ top: Math.max(0, top), left: visibleX ? this.el.scrollLeft : Math.max(0, left), behavior: 'smooth' });
   }
 
   /** コメントの場所が下から bottomInset px（シートなど）に隠れる、または上にはみ出すなら、見える位置まで送る */
@@ -159,23 +215,76 @@ export class PdfViewer {
       const available = Math.max(200, this.el.clientWidth - padding);
       return widths.map((w) => Math.max(MIN_SCALE, available / (this.fitEachPage ? Math.max(1, w) : maxWidth)));
     }
-    const scale = Math.max(MIN_SCALE, (this.zoomMode / 100) * CSS_PX_PER_PT);
+    const scale = clampScale(percentToScale(this.zoomMode));
     return widths.map(() => scale);
   }
 
-  private applyScale(): void {
+  /** 倍率を今の zoomMode に合わせる。focus（表示領域内の座標・既定は中央）の点が同じ位置に残るようスクロールを合わせる */
+  private applyScale(focus?: { x: number; y: number }): void {
     if (this.pageViews.length === 0) return;
+    const view = focus ?? { x: this.el.clientWidth / 2, y: this.el.clientHeight / 2 };
+    const anchor = this.anchorAtView(view.x, view.y);
     const scales = this.computeScales();
-    const ratio = this.el.scrollTop / Math.max(1, this.pagesEl.scrollHeight);
     this.pageViews.forEach((pv, i) => pv.setScale(scales[i] as number));
-    this.el.scrollTop = ratio * this.pagesEl.scrollHeight;
+    if (anchor) this.scrollToAnchor(anchor, view.x, view.y);
     // 倍率だけ変わって交差状態が変わらないページは observer が呼ばれないので、近いページを自分で描き直す
-    for (const pv of this.pageViews) {
-      if (this.isNearViewport(pv)) this.renderPage(pv);
-      else this.paintOverlay(pv);
+    for (const pv of this.pageViews) if (this.isNearViewport(pv)) this.renderPage(pv);
+  }
+
+  /** 表示領域内の座標 (viewX, viewY) にあるページと、ページ内の割合 */
+  private anchorAtView(viewX: number, viewY: number): Anchor | null {
+    const boxes = this.pageViews.map((pv) => ({ left: pv.el.offsetLeft, top: pv.el.offsetTop, width: pv.el.offsetWidth, height: pv.el.offsetHeight }));
+    return anchorAt(boxes, this.el.scrollLeft + viewX, this.el.scrollTop + viewY);
+  }
+
+  private scrollToAnchor(anchor: Anchor, viewX: number, viewY: number): void {
+    const pv = this.pageViews[anchor.index];
+    if (!pv) return;
+    const box = { left: pv.el.offsetLeft, top: pv.el.offsetTop, width: pv.el.offsetWidth, height: pv.el.offsetHeight };
+    const { left, top } = scrollForAnchor(box, anchor, viewX, viewY);
+    this.el.scrollLeft = left;
+    this.el.scrollTop = top;
+  }
+
+  // ---- ピンチ ----
+  private beginPinch(): void {
+    // 「幅に合わせる」でページごとに倍率が違っても、ピンチ中は表示の中央のページの倍率に全ページを揃える
+    const center = this.anchorAtView(this.el.clientWidth / 2, this.el.clientHeight / 2);
+    this.pinchScale = this.pageViews[center?.index ?? 0]?.viewport.scale ?? 1;
+    this.pinched = false;
+  }
+
+  private pinch([clientX, clientY]: [number, number], factor: number, dx: number, dy: number): void {
+    if (!this.pinchScale || !Number.isFinite(factor)) return;
+    const next = clampScale(this.pinchScale * factor);
+    const rect = this.el.getBoundingClientRect();
+    const from = { x: clientX - rect.left, y: clientY - rect.top };
+    const anchor = this.anchorAtView(from.x, from.y);
+    this.pinchScale = next;
+    this.pinched = true;
+    // 寸法だけ変える（今の絵は CSS で伸び縮みする）。指の間にあった点を、動いた後の指の間へ
+    for (const pv of this.pageViews) pv.setScale(next);
+    if (anchor) this.scrollToAnchor(anchor, from.x + dx, from.y + dy);
+  }
+
+  private panBy(dx: number, dy: number): void {
+    this.el.scrollLeft -= dx;
+    this.el.scrollTop -= dy;
+  }
+
+  private endPinch(): void {
+    const scale = this.pinchScale;
+    this.pinchScale = 0;
+    if (this.pinched && scale) {
+      this.zoomMode = scaleToPercent(scale);
+      this.applyScale(); // 百分率に丸めた倍率で描き直す（中央の点は保つ）
+      this.onZoomChange?.(this.zoomMode);
+    } else {
+      for (const pv of this.pageViews) if (this.isNearViewport(pv)) this.renderPage(pv);
     }
   }
 
+  // ---- 描画と、その上限 ----
   private isNearViewport(pv: PageView): boolean {
     const margin = this.el.clientHeight;
     const rect = pv.el.getBoundingClientRect();
@@ -184,9 +293,50 @@ export class PdfViewer {
   }
 
   private renderPage(pv: PageView): void {
+    if (this.pinchScale) return; // ピンチ中は描かない（終わってから描く）
     pv.render()
-      .then(() => this.paintOverlay(pv))
+      .then(() => {
+        this.paintOverlay(pv);
+        this.releaseFarPages();
+      })
       .catch((err: unknown) => console.error(`ページ ${pv.pageIndex + 1} の描画に失敗しました`, err));
+  }
+
+  /** 描画済みのページが上限を超えたら、表示から遠いページの描画を捨てる */
+  private releaseFarPages(): void {
+    const rendered = this.pageViews.filter((pv) => pv.isRendered).map((pv) => pv.pageIndex);
+    const root = this.el.getBoundingClientRect();
+    let visible = 0;
+    const near = new Set<number>();
+    for (const pv of this.pageViews) {
+      if (!this.isNearViewport(pv)) continue;
+      near.add(pv.pageIndex);
+      const rect = pv.el.getBoundingClientRect();
+      if (rect.bottom > root.top && rect.top < root.bottom) visible += 1;
+    }
+    const limit = renderCacheSize(visible, this.cacheBase);
+    for (const index of pagesToRelease(rendered, this.currentPageIndex(), limit, near)) this.pageViews[index]?.release();
+  }
+
+  /** 表示領域の上から 4 割の位置にあるページ */
+  private currentPageIndex(): number {
+    return pageIndexAt(
+      this.pageViews.map((pv) => pv.el.offsetTop),
+      this.el.scrollTop + this.el.clientHeight * 0.4,
+    );
+  }
+
+  // ---- ページ位置の表示 ----
+  private onScroll(): void {
+    if (this.scrollFrame) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      if (this.pageViews.length < 2) return;
+      this.indicatorEl.textContent = `${this.currentPageIndex() + 1} / ${this.pageViews.length}`;
+      this.indicatorEl.classList.add('is-visible');
+      window.clearTimeout(this.indicatorTimer);
+      this.indicatorTimer = window.setTimeout(() => this.indicatorEl.classList.remove('is-visible'), INDICATOR_MS);
+    });
   }
 
   private paintOverlay(pv: PageView): void {

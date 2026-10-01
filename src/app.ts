@@ -16,7 +16,7 @@ import { renderEmptyState } from './ui/EmptyState';
 import { Sidebar } from './ui/Sidebar';
 import { toast } from './ui/toast';
 import { Toolbar } from './ui/Toolbar';
-import { isCompact, lastInputWasTouch, onCompactChange, trackVisualViewport } from './ui/viewport';
+import { isCompact, isTouchDevice, lastInputWasTouch, onCompactChange, trackVisualViewport } from './ui/viewport';
 import { hitTestHighlight } from './viewer/hittest';
 import { PdfViewer } from './viewer/PdfViewer';
 import { watchTextSelection, type TextSelection } from './viewer/selection';
@@ -91,10 +91,11 @@ export function startApp(root: HTMLElement): void {
   viewerWrap.className = 'app-viewer';
   main.append(viewerWrap);
 
-  const viewer = new PdfViewer(viewerWrap);
+  const viewer = new PdfViewer(viewerWrap, { touch: isTouchDevice() });
   viewer.el.hidden = true;
   viewer.setFitEachPage(isCompact());
   onCompactChange((compact) => viewer.setFitEachPage(compact));
+  viewer.onZoomChange = (mode) => toolbar.setZoom(mode);
   const emptyState = renderEmptyState(viewerWrap, {
     openSample: () => void openSample(),
     pickFile: () => toolbar.pickFile(),
