@@ -10,7 +10,6 @@ import { PageView } from './PageView';
 export type ZoomMode = 'fit-width' | number;
 
 const CSS_PX_PER_PT = 96 / 72;
-const SIDE_PADDING = 24;
 const MIN_SCALE = 0.25;
 
 export class PdfViewer {
@@ -22,6 +21,7 @@ export class PdfViewer {
   private resizeTimer = 0;
   private comments: readonly Comment[] = [];
   private selectedId: string | null = null;
+  private fitEachPage = false;
 
   /** ページ上のクリック（付箋アイコン以外）。point は PDF ユーザ空間 */
   onPageClick: ((pageIndex: number, point: [number, number], event: MouseEvent) => void) | null = null;
@@ -49,7 +49,12 @@ export class PdfViewer {
     this.pagesEl.addEventListener('click', (event) => this.handleClick(event));
     // 表示領域の幅が変わったら「幅に合わせる」を計算し直す。ウィンドウのリサイズだけでなく、
     // 非表示（幅 0）で開いてから表示された場合や、サイドバー幅の変化にも追従する。
+    // 高さだけの変化（スマホのキーボード・アドレスバーの出し入れ）では描き直さない。
+    let observedWidth = -1;
     new ResizeObserver(() => {
+      const width = this.el.clientWidth;
+      if (width === observedWidth) return;
+      observedWidth = width;
       if (this.zoomMode !== 'fit-width' || this.pageViews.length === 0) return;
       window.clearTimeout(this.resizeTimer);
       this.resizeTimer = window.setTimeout(() => this.applyScale(), 100);
@@ -64,11 +69,21 @@ export class PdfViewer {
     return this.pageViews.length;
   }
 
+  /**
+   * 「幅に合わせる」をページごとにするか（スマホ用画面）。false なら最も広いページに合わせて全ページ同じ倍率にする。
+   * 横置きのページが 1 枚あるだけで縦のページが 7 割の幅に縮むのを、幅の狭い画面では避けたい。
+   */
+  setFitEachPage(on: boolean): void {
+    if (on === this.fitEachPage) return;
+    this.fitEachPage = on;
+    if (this.zoomMode === 'fit-width') this.applyScale();
+  }
+
   async load(doc: PDFDocumentProxy): Promise<void> {
     this.clear();
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
-    const scale = this.computeScale(pages.map((p) => p.getViewport({ scale: 1 }).width));
-    this.pageViews = pages.map((page, index) => new PageView(index, page, scale));
+    const scales = this.computeScales(pages.map((p) => p.getViewport({ scale: 1 }).width));
+    this.pageViews = pages.map((page, index) => new PageView(index, page, scales[index] as number));
     for (const pv of this.pageViews) {
       this.pagesEl.append(pv.el);
       this.observer.observe(pv.el);
@@ -115,21 +130,26 @@ export class PdfViewer {
     return this.pageViews[index];
   }
 
-  private computeScale(widthsAtScale1?: number[]): number {
+  /** ページごとの倍率（PDF の 1pt を何 CSS px で描くか） */
+  private computeScales(widthsAtScale1?: number[]): number[] {
+    const widths = widthsAtScale1 ?? this.pageViews.map((pv) => pv.page.getViewport({ scale: 1 }).width);
     if (this.zoomMode === 'fit-width') {
-      const widths = widthsAtScale1 ?? this.pageViews.map((pv) => pv.page.getViewport({ scale: 1 }).width);
       const maxWidth = Math.max(1, ...widths);
-      const available = Math.max(200, this.el.clientWidth - SIDE_PADDING * 2);
-      return Math.max(MIN_SCALE, available / maxWidth);
+      // 左右の余白は styles.css の --pages-pad（スマホ用画面では狭い）
+      const style = getComputedStyle(this.pagesEl);
+      const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      const available = Math.max(200, this.el.clientWidth - padding);
+      return widths.map((w) => Math.max(MIN_SCALE, available / (this.fitEachPage ? Math.max(1, w) : maxWidth)));
     }
-    return Math.max(MIN_SCALE, (this.zoomMode / 100) * CSS_PX_PER_PT);
+    const scale = Math.max(MIN_SCALE, (this.zoomMode / 100) * CSS_PX_PER_PT);
+    return widths.map(() => scale);
   }
 
   private applyScale(): void {
     if (this.pageViews.length === 0) return;
-    const scale = this.computeScale();
+    const scales = this.computeScales();
     const ratio = this.el.scrollTop / Math.max(1, this.pagesEl.scrollHeight);
-    for (const pv of this.pageViews) pv.setScale(scale);
+    this.pageViews.forEach((pv, i) => pv.setScale(scales[i] as number));
     this.el.scrollTop = ratio * this.pagesEl.scrollHeight;
     // 倍率だけ変わって交差状態が変わらないページは observer が呼ばれないので、近いページを自分で描き直す
     for (const pv of this.pageViews) {

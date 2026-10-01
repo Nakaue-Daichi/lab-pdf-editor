@@ -12,6 +12,17 @@
   --radius: 8px;
   --toolbar-h: 52px;
   --sidebar-w: 380px;
+  /* 本文（ページ列）の余白。PdfViewer が「幅に合わせる」の計算でここを読む */
+  --pages-pad: 24px;
+  /* スマホ用画面の下部バー */
+  --bb-h: 56px;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  /* 動き（Material 3 の emphasized decelerate / accelerate） */
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
   font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
   font-size: 14px;
   color: var(--ink);
@@ -28,13 +39,39 @@ body,
   height: 100%;
   margin: 0;
 }
+html,
 body {
+  /* 画面全体は動かさない（Android の引っ張って更新・iOS のはね返りを止める）。スクロールは本文と一覧の中だけ */
+  overscroll-behavior: none;
+}
+body {
+  overflow: hidden;
   background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
 }
 .app {
   height: 100%;
+  /* スマホのブラウザはアドレスバーの出し入れで高さが変わる。今の高さ（dvh）に合わせる */
+  height: 100dvh;
   display: grid;
   grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
+}
+.icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+/* 端末に合う説明だけを出す（マウス向け／指向け） */
+.for-touch {
+  display: none !important;
+}
+@media (hover: none) and (pointer: coarse) {
+  .for-touch {
+    display: revert !important;
+  }
+  .for-mouse {
+    display: none !important;
+  }
 }
 .app-main {
   display: grid;
@@ -49,13 +86,23 @@ body {
 
 /* ---- ツールバー ---- */
 .tb {
+  position: relative;
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  overflow: hidden;
+  /* overflow: hidden にするとドロップダウン（Markdown ▾・…）が切れて押せなくなる。
+     はみ出さないことは幅ごとの畳み込み（下の @media）で保つ */
+}
+.tb > * {
+  flex-shrink: 0;
+}
+.tb > .tb-file,
+.tb > .tb-spacer {
+  flex-shrink: 1;
 }
 .tb-brand {
   display: flex;
@@ -118,12 +165,16 @@ summary.tb-btn[disabled] {
   border-color: #e0b400;
 }
 .tb-file {
+  min-width: 0;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
+}
+.tb-save-short {
+  display: none;
 }
 .tb-spacer {
   flex: 1;
@@ -177,16 +228,70 @@ summary.tb-btn[disabled] {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 .tb-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: 0;
   background: none;
   padding: 8px 10px;
   border-radius: 6px;
+  color: var(--ink);
   font: inherit;
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 .tb-menu-list button:hover {
   background: #f2f2f7;
+}
+.tb-menu-list button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.tb-menu-list .icon {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.tb-menu-list hr {
+  margin: 4px 6px;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.tb-menu-sub {
+  color: var(--muted);
+}
+/* 「…」メニュー: 幅が足りないときだけ出し、中身も幅で出し分ける */
+.tb-more {
+  display: none;
+}
+.tb-more summary {
+  display: grid;
+  place-items: center;
+}
+.tb-menu-list [data-compact] {
+  display: none;
+}
+@media (max-width: 1439px) {
+  [data-wide] {
+    display: none !important;
+  }
+  .tb-more {
+    display: block;
+  }
+}
+@media (max-width: 1099px) {
+  .tb-brand-text,
+  .tb-author-label,
+  .tb-save-long {
+    display: none;
+  }
+  .tb-save-short {
+    display: inline;
+  }
+  .tb-brand {
+    margin-right: 0;
+  }
 }
 
 /* ---- ビューア ---- */
@@ -206,7 +311,11 @@ summary.tb-btn[disabled] {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  padding: 24px;
+  padding: var(--pages-pad);
+  /* 拡大してページが表示幅より広くなっても左端までスクロールで届くよう、列ごと広げる
+     （幅を固定したまま align-items: center だと、はみ出しが左右均等に出て左側に届かない） */
+  width: max-content;
+  min-width: 100%;
 }
 .pv-page {
   position: relative;
@@ -297,10 +406,21 @@ summary.tb-btn[disabled] {
   padding: 12px 16px 10px;
   border-bottom: 1px solid var(--line);
 }
+.sb-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .sb-title {
   margin: 0;
   font-size: 14px;
   font-weight: 700;
+}
+/* シートの取っ手・閉じる・前後への移動はスマホ用画面だけ */
+.sb-grabber,
+.sb-close,
+.sb-nav {
+  display: none;
 }
 .sb-count {
   display: inline-block;
@@ -525,6 +645,36 @@ summary.tb-btn[disabled] {
   font-size: 12.5px;
   line-height: 1.6;
 }
+.empty-actions {
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+.empty-actions.for-touch {
+  display: none !important;
+}
+@media (hover: none) and (pointer: coarse) {
+  .empty-actions.for-touch {
+    display: flex !important;
+  }
+}
+.empty-btn {
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.empty-btn-primary {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
 button.link {
   padding: 0;
   border: 0;
@@ -569,5 +719,374 @@ button.link {
 @media (max-width: 960px) {
   :root {
     --sidebar-w: 300px;
+  }
+}
+
+/* ---- 下部バー（スマホ用画面だけ） ---- */
+.mb {
+  display: none;
+}
+
+/* ---- 指で操作する端末: 押せる大きさは 44px 以上、入力欄は 16px（iOS は 16px 未満の欄にフォーカスすると画面ごと拡大する） ---- */
+@media (pointer: coarse) {
+  .tb-btn {
+    min-height: 44px;
+    padding: 8px 14px;
+  }
+  .tb-btn-icon {
+    min-width: 44px;
+  }
+  .tb-author input,
+  .tb-zoom {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .tb-menu-list button {
+    min-height: 44px;
+  }
+  .cc-text,
+  .cc-reply-form input {
+    font-size: 16px;
+  }
+  .cc-reply-form input,
+  .cc-reply-form button {
+    min-height: 44px;
+  }
+  .cc-icon {
+    min-width: 44px;
+    min-height: 44px;
+    margin-top: -8px;
+    margin-right: -10px;
+    margin-bottom: -8px;
+    font-size: 15px;
+  }
+  .cc-replies li {
+    align-items: center;
+  }
+  .sb-chip {
+    min-height: 36px;
+    padding: 4px 12px 4px 8px;
+    font-size: 13px;
+  }
+  /* 付箋アイコンは見た目 22px のまま、触れる範囲を 44px に広げる */
+  .pv-note::before {
+    content: '';
+    position: absolute;
+    inset: -11px;
+  }
+}
+
+/* ---- スマホ用画面: 上部バー＋本文＋下部バー＋コメントのボトムシート ----
+   条件は src/ui/viewport.ts の COMPACT_QUERY と同じにしておく */
+@media (max-width: 767px), (max-height: 500px) and (pointer: coarse) {
+  :root {
+    --toolbar-h: 48px;
+    --pages-pad: 8px;
+    /* シートが使える高さ（上部バーと下部バーの間）。--vvh は src/ui/viewport.ts が置く見えている高さ */
+    --sheet-room: calc(var(--vvh, 100dvh) - var(--toolbar-h) - var(--safe-t) - var(--bb-h) - var(--safe-b));
+  }
+  .app {
+    grid-template-rows: calc(var(--toolbar-h) + var(--safe-t)) minmax(0, 1fr) calc(var(--bb-h) + var(--safe-b));
+  }
+  .app-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-desk] {
+    display: none !important;
+  }
+  .tb-menu-list [data-compact] {
+    display: flex;
+  }
+
+  /* 上部バー: ロゴ・ファイル名・「…」 */
+  .tb {
+    gap: 2px;
+    padding: var(--safe-t) max(4px, var(--safe-r)) 0 max(12px, var(--safe-l));
+  }
+  .tb-brand {
+    margin-right: 6px;
+  }
+  .tb-brand-text {
+    display: none;
+  }
+  .app:not(.has-doc) .tb-brand-text {
+    display: inline;
+  }
+  .tb-file {
+    flex: 1;
+    max-width: none;
+    color: var(--ink);
+    font-size: 13px;
+  }
+  .tb-spacer {
+    display: none;
+  }
+  .tb-more summary {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-color: transparent;
+  }
+  .tb-menu-list {
+    position: fixed;
+    top: calc(var(--toolbar-h) + var(--safe-t) - 2px);
+    right: max(6px, var(--safe-r));
+    min-width: 248px;
+    max-height: calc(var(--vvh, 100dvh) - var(--toolbar-h) - var(--safe-t) - 12px);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .tb-menu-list button {
+    min-height: 48px;
+    font-size: 15px;
+  }
+
+  /* 本文: 余白を詰める。シートが半分開いている間は、最後のページもシートの上まで送れるよう下を空ける */
+  .pv-pages {
+    gap: 8px;
+  }
+  .app[data-sheet='half'] .pv-pages {
+    padding-bottom: calc(var(--sheet-room) * 0.5 + 16px);
+  }
+
+  /* 下部バー: よく使う操作を親指の届く位置に。文字を選んでいる間は「解除／＋ コメント」に差し替える */
+  .mb {
+    position: relative;
+    z-index: 32;
+    display: block;
+    padding: 0 max(4px, var(--safe-r)) var(--safe-b) max(4px, var(--safe-l));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+  }
+  .mb-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    height: var(--bb-h);
+  }
+  .mb-selecting,
+  .mb.is-selecting .mb-tools {
+    display: none;
+  }
+  .mb.is-selecting .mb-selecting {
+    display: flex;
+  }
+  .mb-btn {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 44px;
+    margin: 4px 0;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.1;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .mb-btn .icon {
+    width: 22px;
+    height: 22px;
+  }
+  .mb-btn:disabled {
+    opacity: 0.38;
+    cursor: default;
+  }
+  .mb-btn:active:not(:disabled) {
+    background: #f0f0f6;
+  }
+  .mb-btn.is-on {
+    background: #ecebf7;
+    color: var(--brand);
+  }
+  .mb-btn.tb-toggle.is-on {
+    background: var(--accent);
+    color: var(--ink);
+  }
+  .mb-btn-primary {
+    color: var(--brand);
+    font-weight: 700;
+  }
+  .mb-count {
+    display: inline-block;
+    min-width: 16px;
+    margin-left: 3px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--brand);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    vertical-align: 1px;
+  }
+  .mb-selecting .mb-btn {
+    flex-direction: row;
+    gap: 6px;
+    font-size: 15px;
+  }
+  .mb-selecting .mb-btn-wide {
+    flex: 0 0 96px;
+  }
+  .mb-btn-comment {
+    flex: 1;
+    margin: 6px 4px;
+    border-radius: 22px;
+    background: var(--brand);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(45, 40, 127, 0.3);
+  }
+  .mb-btn-comment:active:not(:disabled) {
+    background: var(--brand-ink);
+  }
+
+  /* コメントのボトムシート。段は .app の data-sheet（closed / half / full）で決まる */
+  .sb {
+    position: fixed;
+    z-index: 30;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--bb-h) + var(--safe-b));
+    height: var(--sheet-room);
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -10px 30px rgba(20, 20, 60, 0.14);
+    transition:
+      height 0.3s var(--ease-enter),
+      transform 0.3s var(--ease-enter);
+  }
+  .app[data-sheet='half'] .sb {
+    height: calc(var(--sheet-room) * 0.5);
+  }
+  .app[data-sheet='closed'] .sb {
+    height: calc(var(--sheet-room) * 0.5);
+    transform: translateY(calc(100% + var(--bb-h) + var(--safe-b) + 16px));
+    box-shadow: none;
+    transition-duration: 0.2s;
+    transition-timing-function: var(--ease-exit);
+  }
+  .sb-head {
+    padding: 0 6px 8px 16px;
+  }
+  .sb-grabber {
+    display: block;
+    position: relative;
+    width: calc(100% + 22px);
+    height: 22px;
+    margin: 0 -6px 0 -16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: grab;
+  }
+  .sb-grabber::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: #c9cbd6;
+  }
+  .sb-title {
+    font-size: 16px;
+    white-space: nowrap;
+  }
+  .sb-nav {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+  }
+  .sb-nav-btn,
+  .sb-close {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 22px;
+    background: none;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .sb-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .sb-nav-pos {
+    min-width: 52px;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .sb-close {
+    color: var(--muted);
+  }
+  .sb-filters {
+    margin-top: 4px;
+  }
+  .sb-list {
+    padding: 8px 12px calc(16px + var(--safe-b));
+    overscroll-behavior: contain;
+  }
+  .cc {
+    padding: 12px 14px;
+  }
+  .cc-quote {
+    font-size: 13px;
+  }
+  .cc-replies {
+    font-size: 14px;
+  }
+
+  /* 通知は下部バーの上・中央 */
+  .toast-host {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--bb-h) + var(--safe-b) + 12px);
+    align-items: center;
+  }
+  .toast {
+    max-width: 100%;
+  }
+
+  /* 空状態 */
+  .empty {
+    place-items: start center;
+    padding: 16px;
+    overflow: auto;
+  }
+  .empty-card {
+    padding: 22px 20px;
+    border-style: solid;
+    border-color: var(--line);
+  }
+  .empty h1 {
+    font-size: 19px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb,
+  .toast {
+    transition: none !important;
   }
 }

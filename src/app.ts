@@ -10,10 +10,12 @@ import { readAnnotations, writeAnnotations } from './pdf/annotations';
 import { sha256Hex } from './pdf/hash';
 import { loadPdfDocument, PdfOpenError, type LoadedPdf } from './pdf/loader';
 import { deleteDraft, loadDraft, saveDraft } from './storage/drafts';
+import { CommentSheet } from './ui/CommentSheet';
 import { renderEmptyState } from './ui/EmptyState';
 import { Sidebar } from './ui/Sidebar';
 import { toast } from './ui/toast';
 import { Toolbar } from './ui/Toolbar';
+import { isCompact, onCompactChange, trackVisualViewport } from './ui/viewport';
 import { hitTestHighlight } from './viewer/hittest';
 import { PdfViewer } from './viewer/PdfViewer';
 import { watchTextSelection, type TextSelection } from './viewer/selection';
@@ -53,6 +55,7 @@ export function startApp(root: HTMLElement): void {
   const app = document.createElement('div');
   app.className = 'app';
   root.replaceChildren(app);
+  trackVisualViewport();
 
   const toolbar = new Toolbar(app, {
     openFiles: (files) => void openFile(files[0] as File),
@@ -62,26 +65,38 @@ export function startApp(root: HTMLElement): void {
     copyMarkdown: () => void copyMarkdown(),
     saveMarkdown,
     setAuthor,
-    setZoom: (mode) => viewer.setZoom(mode),
+    editAuthor,
+    setZoom: (mode) => {
+      viewer.setZoom(mode);
+      toolbar.setZoom(viewer.zoom);
+    },
     toggleNoteMode: () => setNoteMode(!noteMode),
+    toggleComments: () => sheet.toggle(),
+    commentSelection: () => commentOnSelection(),
+    cancelSelection: () => clearTextSelection(),
     undo,
     redo,
   });
 
   const main = document.createElement('div');
   main.className = 'app-main';
-  app.append(main);
+  // 下部バー（スマホ用画面）は .app の 3 段目に来るよう、本文の前に入れておいたものを後ろへ回す
+  app.insertBefore(main, toolbar.bottomEl);
   const viewerWrap = document.createElement('div');
   viewerWrap.className = 'app-viewer';
   main.append(viewerWrap);
 
   const viewer = new PdfViewer(viewerWrap);
   viewer.el.hidden = true;
+  viewer.setFitEachPage(isCompact());
+  onCompactChange((compact) => viewer.setFitEachPage(compact));
   const emptyState = renderEmptyState(viewerWrap, {
     openSample: () => void openSample(),
-    pickFile: () => toolbar.el.querySelector<HTMLInputElement>('[data-role="file-input"]')?.click(),
+    pickFile: () => toolbar.pickFile(),
   });
   const sidebar = new Sidebar(main, store, { onJump: (c) => viewer.scrollToComment(c) });
+  const sheet = new CommentSheet(app, sidebar.el);
+  sheet.onChange((state, compact) => toolbar.setCommentsOpen(compact && state !== 'closed'));
 
   const selectButton = document.createElement('button');
   selectButton.type = 'button';
@@ -118,6 +133,12 @@ export function startApp(root: HTMLElement): void {
     }
     setAuthor(name);
     return true;
+  }
+
+  /** 入力欄の無いスマホ用画面で著者名を変える */
+  function editAuthor(): void {
+    const name = window.prompt('著者名（コメントの著者として PDF に記録されます）', store.author);
+    if (name !== null) setAuthor(name);
   }
 
   // ---- 文書を開く ----
@@ -171,6 +192,7 @@ export function startApp(root: HTMLElement): void {
     current = { bytes, hash, fileName, pdf };
     store.openDocument({ fileName, pageCount: read.pageCount, comments, foreignAnnotations: read.foreignAnnotations });
 
+    app.classList.add('has-doc');
     emptyState.hidden = true;
     viewer.el.hidden = false;
     await viewer.load(pdf.doc);
@@ -193,6 +215,7 @@ export function startApp(root: HTMLElement): void {
   // ---- Store の変化を画面へ ----
   store.subscribe((event) => {
     toolbar.setHistory(store.canUndo, store.canRedo);
+    toolbar.setCommentCount(store.comments.length);
     if (event.type === 'comments' || event.type === 'text') scheduleDraftSave();
     if (event.type === 'comments' || event.type === 'selection' || event.type === 'document') {
       viewer.setComments(store.comments, store.selectedId);
@@ -229,13 +252,22 @@ export function startApp(root: HTMLElement): void {
     },
   );
   selectButton.addEventListener('mousedown', (event) => event.preventDefault()); // 押しても選択を消さない
-  selectButton.addEventListener('click', () => {
+  selectButton.addEventListener('click', () => commentOnSelection());
+
+  /** 選んでいる文字列にハイライトとコメントを付け、入力欄にフォーカスする */
+  function commentOnSelection(): void {
     if (!pendingSelection || !ensureAuthor()) return;
     const c = store.addHighlight(pendingSelection);
-    document.getSelection()?.removeAllRanges();
-    selectButton.hidden = true;
+    clearTextSelection();
     sidebar.focusComment(c.id);
-  });
+  }
+
+  function clearTextSelection(): void {
+    document.getSelection()?.removeAllRanges();
+    pendingSelection = null;
+    selectButton.hidden = true;
+    toolbar.setSelecting(false);
+  }
 
   // ---- ページ上のクリック: 付箋を置く／ハイライトを選ぶ ----
   viewer.onPageClick = (pageIndex, point) => {

@@ -7,6 +7,8 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    // ライセンス表示（/*! … */・@license）を配信物に残す。ソースに写したアイコン（src/ui/icons.ts）の ISC/MIT の条件
+    rolldownOptions: { output: { comments: { legal: true } } },
   },
   worker: {
     format: 'es',

@@ -1,6 +1,8 @@
-// 右側のコメント一覧。Store を購読して描き直す。本文の編集中（text イベント）は作り直さない。
+// コメント一覧（デスクトップは右のサイドバー、スマホ用画面ではボトムシートの中身）。Store を購読して描き直す。
+// 本文の編集中（text イベント）は作り直さない。
 import type { ReviewStore } from '../model/store';
 import type { Comment } from '../model/types';
+import { icon } from './icons';
 
 export interface SidebarCallbacks {
   /** カードが押された（本文側をそこへスクロールさせたい） */
@@ -26,6 +28,7 @@ export class Sidebar {
   private readonly filterEl: HTMLDivElement;
   private readonly noticeEl: HTMLDivElement;
   private readonly emptyEl: HTMLDivElement;
+  private readonly posEl: HTMLSpanElement;
   private hiddenAuthors = new Set<string>();
   private pendingFocusId: string | null = null;
 
@@ -36,16 +39,27 @@ export class Sidebar {
   ) {
     this.el = document.createElement('aside');
     this.el.className = 'sb';
+    this.el.setAttribute('aria-label', 'コメント一覧');
     this.el.innerHTML = `
       <div class="sb-head">
-        <h2 class="sb-title">コメント <span class="sb-count" data-role="count">0</span></h2>
+        <button type="button" class="sb-grabber" data-role="grabber" aria-label="一覧の高さを切り替える"></button>
+        <div class="sb-titlebar">
+          <h2 class="sb-title">コメント <span class="sb-count" data-role="count">0</span></h2>
+          <div class="sb-nav" data-role="nav">
+            <button type="button" class="sb-nav-btn" data-act="prev" aria-label="前のコメント">${icon('chevron-left')}</button>
+            <span class="sb-nav-pos" data-role="pos"></span>
+            <button type="button" class="sb-nav-btn" data-act="next" aria-label="次のコメント">${icon('chevron-right')}</button>
+          </div>
+          <button type="button" class="sb-close" data-act="sheet-close" aria-label="一覧を閉じる">${icon('x')}</button>
+        </div>
         <div class="sb-filters" data-role="filters"></div>
       </div>
       <div class="sb-notice" data-role="notice" hidden></div>
       <div class="sb-list" data-role="list"></div>
       <div class="sb-empty" data-role="empty">
         <p>まだコメントはありません。</p>
-        <p>本文の文字列をドラッグして選ぶと「＋ コメント」が出ます。図など文字の無い場所には、ツールバーの「付箋」を押してからクリックしてください。</p>
+        <p class="for-mouse">本文の文字列をドラッグして選ぶと「＋ コメント」が出ます。図など文字の無い場所には、ツールバーの「付箋」を押してからクリックしてください。</p>
+        <p class="for-touch">本文の文字を長押しして範囲を選ぶと、下に「＋ コメント」が出ます。図など文字の無い場所には「付箋」を押してから、置きたい場所をタップしてください。</p>
       </div>
     `;
     parent.append(this.el);
@@ -54,6 +68,9 @@ export class Sidebar {
     this.filterEl = this.query('[data-role="filters"]');
     this.noticeEl = this.query('[data-role="notice"]');
     this.emptyEl = this.query('[data-role="empty"]');
+    this.posEl = this.query('[data-role="pos"]');
+    this.query('[data-act="prev"]').addEventListener('click', () => this.step(-1));
+    this.query('[data-act="next"]').addEventListener('click', () => this.step(1));
 
     store.subscribe((event) => {
       switch (event.type) {
@@ -83,15 +100,43 @@ export class Sidebar {
     return el;
   }
 
-  /** 次の描画後にそのコメントの入力欄へフォーカスする（新規作成直後に使う） */
+  /**
+   * 次の描画後にそのコメントの入力欄へフォーカスする（新規作成直後に使う）。
+   * iOS はユーザー操作の処理の中で同期的に focus しないとキーボードを出さないので、呼び出し元はタップの処理から直接呼ぶ。
+   * ページ全体が動かないよう preventScroll にして、一覧の中だけをスクロールする。
+   */
   focusComment(id: string): void {
     const textarea = this.listEl.querySelector<HTMLTextAreaElement>(`[data-id="${id}"] textarea`);
     if (textarea) {
-      textarea.focus();
+      textarea.focus({ preventScroll: true });
       this.scrollCardIntoView(id);
     } else {
       this.pendingFocusId = id;
     }
+  }
+
+  /** 表示中（著者で隠していない）のコメントのうち、選択の前後へ移る。選択が無ければ先頭か末尾 */
+  private step(direction: 1 | -1): void {
+    const visible = this.visibleComments();
+    if (visible.length === 0) return;
+    const index = visible.findIndex((c) => c.id === this.store.selectedId);
+    const next = index < 0 ? (direction > 0 ? 0 : visible.length - 1) : Math.min(visible.length - 1, Math.max(0, index + direction));
+    const target = visible[next] as Comment;
+    this.store.select(target.id);
+    this.callbacks.onJump(target);
+  }
+
+  private visibleComments(): Comment[] {
+    return this.store.comments.filter((c) => !this.hiddenAuthors.has(c.author));
+  }
+
+  /** 「3 / 12」の表示と ‹ › の押せる状態 */
+  private renderPosition(): void {
+    const visible = this.visibleComments();
+    const index = visible.findIndex((c) => c.id === this.store.selectedId);
+    this.posEl.textContent = visible.length === 0 ? '' : index < 0 ? `${visible.length} 件` : `${index + 1} / ${visible.length}`;
+    this.query<HTMLButtonElement>('[data-act="prev"]').disabled = visible.length === 0 || index === 0;
+    this.query<HTMLButtonElement>('[data-act="next"]').disabled = visible.length === 0 || index === visible.length - 1;
   }
 
   private render(): void {
@@ -222,6 +267,7 @@ export class Sidebar {
     for (const card of this.listEl.querySelectorAll<HTMLElement>('.cc')) {
       card.classList.toggle('is-selected', card.dataset.id === selectedId);
     }
+    this.renderPosition();
     if (selectedId) this.scrollCardIntoView(selectedId);
   }
 
