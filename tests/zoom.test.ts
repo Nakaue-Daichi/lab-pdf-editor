@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorAt, clampScale, MAX_SCALE, MIN_SCALE, percentToScale, scaleToPercent, scrollForAnchor } from '../src/viewer/zoom';
+import { anchorAt, clampScale, MAX_SCALE, MIN_SCALE, percentToScale, scaleToPercent, scrollForAnchor, snapsToFit } from '../src/viewer/zoom';
 
 describe('scale and percent', () => {
   it('converts between the 96dpi percentage and the PDF scale', () => {
@@ -12,6 +12,18 @@ describe('scale and percent', () => {
     expect(clampScale(0.01)).toBe(MIN_SCALE);
     expect(clampScale(99)).toBe(MAX_SCALE);
     expect(clampScale(1.5)).toBe(1.5);
+  });
+});
+
+describe('snapsToFit', () => {
+  it('returns to fit-width when a pinch ends at, below or just above the fit scale', () => {
+    expect(snapsToFit(0.6, 0.6)).toBe(true);
+    expect(snapsToFit(0.62, 0.6)).toBe(true);
+    expect(snapsToFit(0.4, 0.6)).toBe(true);
+  });
+  it('keeps the pinched zoom when clearly larger than the fit scale', () => {
+    expect(snapsToFit(0.66, 0.6)).toBe(false);
+    expect(snapsToFit(1.2, 0.6)).toBe(false);
   });
 });
 

@@ -66,3 +66,29 @@ export function pdfRectToCss(rect: Rect, viewport: ViewportLike): { left: number
   const [x2, y2] = viewport.convertToViewportPoint(rect[2], rect[3]) as [number, number];
   return { left: Math.min(x1, x2), top: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
 }
+
+/** 寸法（回転後の CSS px）も持つビューポート */
+export interface SizedViewportLike extends ViewportLike {
+  width: number;
+  height: number;
+}
+
+/**
+ * PDF ユーザ空間の矩形 → ページに対する %（left/top/width/height）。
+ * % で置いた要素は、倍率が変わってページの寸法だけ変わったとき（ピンチ中）も置き直さずに追従する。
+ */
+export function pdfRectToPercent(rect: Rect, viewport: SizedViewportLike): { left: number; top: number; width: number; height: number } {
+  const css = pdfRectToCss(rect, viewport);
+  return {
+    left: (css.left / viewport.width) * 100,
+    top: (css.top / viewport.height) * 100,
+    width: (css.width / viewport.width) * 100,
+    height: (css.height / viewport.height) * 100,
+  };
+}
+
+/** PDF ユーザ空間の点 → ページに対する % */
+export function pdfPointToPercent([x, y]: [number, number], viewport: SizedViewportLike): { left: number; top: number } {
+  const [vx, vy] = viewport.convertToViewportPoint(x, y) as [number, number];
+  return { left: (vx / viewport.width) * 100, top: (vy / viewport.height) * 100 };
+}

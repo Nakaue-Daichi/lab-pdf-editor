@@ -19,6 +19,17 @@ export function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
 
+/** ピンチを終えた倍率が「幅に合わせる」のこの倍以下なら、幅合わせに戻す */
+export const FIT_SNAP_RATIO = 1.05;
+
+/**
+ * ピンチの後で「幅に合わせる」に戻すか。幅合わせより縮めた・ほぼ同じ所まで戻したなら戻す
+ * （iOS の PDF 表示と同じく、幅合わせより小さくは留めない。スマホ用画面ではページごとの幅合わせも戻る）。
+ */
+export function snapsToFit(scale: number, fitScale: number): boolean {
+  return scale <= fitScale * FIT_SNAP_RATIO;
+}
+
 /** ページ要素の、スクロールする中身の中での位置と寸法（CSS px） */
 export interface PageBox {
   left: number;

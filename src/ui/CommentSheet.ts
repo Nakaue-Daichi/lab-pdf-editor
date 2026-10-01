@@ -15,6 +15,8 @@ type Listener = (state: SheetState, compact: boolean) => void;
 
 /** これ以上動いたらタップではなくドラッグとみなす（px） */
 const DRAG_SLOP = 6;
+/** 半分の段を使うのに要る高さ（px）。横向きのスマホ（使える高さ 300px 前後）では半分だと見出ししか入らないので全高にする */
+const MIN_ROOM_FOR_HALF = 360;
 
 export class CommentSheet {
   private state: SheetState = 'closed';
@@ -38,7 +40,7 @@ export class CommentSheet {
   ) {
     onCompactChange((compact) => {
       this.compact = compact;
-      if (!compact) this.endTyping();
+      if (!compact) this.endTyping(false);
       this.apply();
     });
     sheetEl.querySelector('[data-act="sheet-close"]')?.addEventListener('click', () => this.set('closed'));
@@ -61,7 +63,19 @@ export class CommentSheet {
     return !this.compact || this.state !== 'closed';
   }
 
+  /** 半分の段が使えるだけの高さがあるか */
+  get canHalf(): boolean {
+    // 下部バーの上端まで（入力中は下部バーを隠しているので、ふだんの高さ 56px を引いて見積もる）
+    const bar = this.app.querySelector<HTMLElement>('.mb');
+    const bottom = bar && bar.offsetHeight > 0 ? bar.getBoundingClientRect().top : window.innerHeight - 56;
+    return bottom - this.topBarEl.getBoundingClientRect().bottom >= MIN_ROOM_FOR_HALF;
+  }
+
   set(state: SheetState): void {
+    if (state === 'half' && this.compact && !this.canHalf) state = 'full';
+    // 入力中は全高と決めているので、全高以外にするなら入力もやめる（利用者が閉じた・下げた段を、後で書き始める前の段へ巻き戻さない。
+    // 入力中のまま閉じると下部バーが隠れたまま残る）
+    if (state !== 'full') this.stopTyping();
     if (state === this.state) return;
     this.state = state;
     this.apply();
@@ -103,15 +117,9 @@ export class CommentSheet {
     this.sheetEl.addEventListener('focusin', (event) => {
       if (this.compact && (event.target as Element).matches('input, textarea')) this.startTyping();
     });
-    this.sheetEl.addEventListener('focusout', () => {
-      // フォーカスの移動先が決まってから判定する
-      window.setTimeout(() => {
-        if (!this.typing || this.sheetEl.contains(document.activeElement)) return;
-        if (this.touchingInside) return; // 一覧の中のボタン等を押した（iOS はボタンにフォーカスを移さない）
-        this.endTyping();
-      }, 0);
-    });
-    // 一覧の外を触ったら書き終えたとみなす（入力欄からフォーカスが外れないブラウザもある）
+    // 入力欄からフォーカスが外れたら（キーボードの「完了」など）入力中をやめる。移動先が決まってから判定する
+    this.sheetEl.addEventListener('focusout', () => window.setTimeout(() => this.checkTyping(), 0));
+    // 一覧の中を触ったか（触ったせいでフォーカスが外れたのなら、書き終えても段は戻さない）
     document.addEventListener(
       'pointerdown',
       (event) => {
@@ -119,7 +127,8 @@ export class CommentSheet {
         window.clearTimeout(this.touchingTimer);
         this.touchingInside = inside;
         if (inside) this.touchingTimer = window.setTimeout(() => (this.touchingInside = false), 600);
-        else if (this.typing && !(event.target as Element).closest?.('.tb, .mb')) this.endTyping();
+        // 一覧の外（全高の間は見えている上部バーくらい）を触ったら書き終えたとみなす。フォーカスを外さないブラウザもある
+        else if (this.typing && !(event.target as Element).closest?.('.tb, .mb')) this.endTyping(true);
       },
       { capture: true },
     );
@@ -141,7 +150,19 @@ export class CommentSheet {
     this.set('full');
   }
 
-  private endTyping(): void {
+  /** 入力欄にフォーカスが残っていなければ入力中をやめる。一覧の中を触ったせいなら段はそのまま */
+  private checkTyping(): void {
+    if (!this.typing) return;
+    const active = document.activeElement;
+    if (active instanceof Element && this.sheetEl.contains(active) && active.matches('input, textarea')) return;
+    this.endTyping(!this.touchingInside);
+  }
+
+  /**
+   * 入力中をやめる。restore なら、新しいコメントを書き始める前の段へ戻す（読む作業にすぐ戻れる）。
+   * 書き始めたコメントがあれば onComposeEnd で知らせる（空のままなら「取り消す」を出すため）。
+   */
+  private endTyping(restore: boolean): void {
     if (!this.typing) return;
     this.typing = false;
     this.app.classList.remove('is-typing');
@@ -149,8 +170,16 @@ export class CommentSheet {
     const id = this.composeId;
     this.composeReturn = null;
     this.composeId = null;
-    if (back !== null) this.set(back);
+    if (restore && back !== null) this.set(back);
     if (id !== null) this.onComposeEnd?.(id);
+  }
+
+  /** シートを閉じる・動かすときに、入力中なら（キーボードも）やめる。段は呼び出し元が決める */
+  private stopTyping(): void {
+    if (!this.typing) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && this.sheetEl.contains(active)) active.blur();
+    this.endTyping(false);
   }
 
   // ---- 見出しのドラッグ ----
@@ -172,6 +201,7 @@ export class CommentSheet {
       // 見出しの中のボタン（前後・閉じる）はそのまま押させる。グラバーはタップとドラッグの両方
       const target = event.target as Element;
       if (target.closest('button') && !target.closest('[data-role="grabber"]')) return;
+      // 入力中をやめるのは離したとき（押した瞬間にやめるとシートの位置が変わり、タップが取っ手から外れる）
       pointerId = event.pointerId;
       startY = event.clientY;
       startHeight = this.sheetEl.getBoundingClientRect().height;
@@ -206,9 +236,10 @@ export class CommentSheet {
       const velocity = last.t > first.t ? (last.h - first.h) / (last.t - first.t) : 0;
       const full = room();
       const next = snapSheet(last.h, velocity, full * 0.5, full);
-      // インラインの高さを外すと、CSS の段の高さへ transition で吸い付く
+      // インラインの高さを外すと、CSS の段の高さへ transition で吸い付く。シートを動かしたら書くのはやめる
       this.sheetEl.classList.remove('is-dragging');
       this.sheetEl.style.height = '';
+      this.stopTyping();
       this.set(next);
       // ドラッグの直後に来る click をグラバーのタップ（段の切り替え）と取り違えない
       const swallow = (e: Event): void => e.stopImmediatePropagation();
@@ -217,6 +248,9 @@ export class CommentSheet {
     };
     head.addEventListener('pointerup', finish);
     head.addEventListener('pointercancel', finish);
-    grabber.addEventListener('click', () => this.set(this.state === 'full' ? 'half' : 'full'));
+    grabber.addEventListener('click', () => {
+      this.stopTyping();
+      this.set(this.state === 'full' ? 'half' : 'full');
+    });
   }
 }

@@ -271,6 +271,7 @@ export function startApp(root: HTMLElement): void {
       window.clearTimeout(hideSelectionTimer);
       if (selection) {
         pendingSelection = selection;
+        armedSelection = null; // 押しかけてやめた古い選択を、次の押下で使わない
         showSelectionAction(selection);
         return;
       }
@@ -380,13 +381,16 @@ export function startApp(root: HTMLElement): void {
     viewer.ensureVisible(c, viewer.el.clientHeight * 0.5);
   }
 
-  /** 一覧のカードから本文の場所へ移る。スマホ用画面では全高のシートを半分に下げ、見えている部分の上の方に出す */
+  /**
+   * 一覧のカードから本文の場所へ移る。スマホ用画面では全高のシートを半分に下げ、見えている部分の上の方に出す
+   * （横向きのスマホなど半分の段が使えないときは閉じる）
+   */
   function jumpToComment(c: Comment): void {
     if (!sheet.isSheet) {
       viewer.scrollToComment(c);
       return;
     }
-    if (sheet.current === 'full') sheet.set('half');
+    if (sheet.current === 'full') sheet.set(sheet.canHalf ? 'half' : 'closed');
     viewer.scrollToComment(c, 0.2);
   }
 

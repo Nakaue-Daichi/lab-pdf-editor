@@ -18,7 +18,7 @@ import {
   RENDER_CACHE_BASE_TOUCH,
   renderCacheSize,
 } from './renderBudget';
-import { anchorAt, clampScale, MIN_SCALE, percentToScale, scaleToPercent, scrollForAnchor, type Anchor } from './zoom';
+import { anchorAt, clampScale, MIN_SCALE, percentToScale, scaleToPercent, scrollForAnchor, snapsToFit, type Anchor } from './zoom';
 
 /** 'fit-width' か百分率。100% = 96dpi 換算（1pt = 1.333px）。 */
 export type ZoomMode = 'fit-width' | number;
@@ -30,6 +30,11 @@ export interface PdfViewerOptions {
 
 /** ページ位置（「3 / 12」）を消すまでの時間 */
 const INDICATOR_MS = 1200;
+/**
+ * 「表示付近」= 表示領域の上下に、表示領域の高さのこの倍まで。描き始める判定（IntersectionObserver）と
+ * 捨てない判定（isNearViewport）で同じ値を使う。ずれると、付近と見なされず捨てられたのに observer が二度と呼ばれず白いまま残る
+ */
+const NEAR_VIEWPORTS = 1;
 
 export class PdfViewer {
   readonly el: HTMLDivElement;
@@ -81,7 +86,7 @@ export class PdfViewer {
           if (pv) this.renderPage(pv);
         }
       },
-      { root: this.el, rootMargin: '100% 0px' },
+      { root: this.el, rootMargin: `${NEAR_VIEWPORTS * 100}% 0px` },
     );
     this.pagesEl.addEventListener('click', (event) => this.handleClick(event));
     this.el.addEventListener('scroll', () => this.onScroll(), { passive: true });
@@ -206,17 +211,24 @@ export class PdfViewer {
 
   /** ページごとの倍率（PDF の 1pt を何 CSS px で描くか） */
   private computeScales(widthsAtScale1?: number[]): number[] {
-    const widths = widthsAtScale1 ?? this.pageViews.map((pv) => pv.page.getViewport({ scale: 1 }).width);
-    if (this.zoomMode === 'fit-width') {
-      const maxWidth = Math.max(1, ...widths);
-      // 左右の余白は styles.css の --pages-pad（スマホ用画面では狭い）
-      const style = getComputedStyle(this.pagesEl);
-      const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-      const available = Math.max(200, this.el.clientWidth - padding);
-      return widths.map((w) => Math.max(MIN_SCALE, available / (this.fitEachPage ? Math.max(1, w) : maxWidth)));
-    }
+    const widths = widthsAtScale1 ?? this.pageWidthsAtScale1();
+    if (this.zoomMode === 'fit-width') return this.fitScales(widths);
     const scale = clampScale(percentToScale(this.zoomMode));
     return widths.map(() => scale);
+  }
+
+  private pageWidthsAtScale1(): number[] {
+    return this.pageViews.map((pv) => pv.page.getViewport({ scale: 1 }).width);
+  }
+
+  /** 「幅に合わせる」の倍率。fitEachPage ならページごと、そうでなければ最も広いページに合わせて全ページ同じ */
+  private fitScales(widths: number[]): number[] {
+    const maxWidth = Math.max(1, ...widths);
+    // 左右の余白は styles.css の --pages-pad（スマホ用画面では狭い）
+    const style = getComputedStyle(this.pagesEl);
+    const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const available = Math.max(200, this.el.clientWidth - padding);
+    return widths.map((w) => Math.max(MIN_SCALE, available / (this.fitEachPage ? Math.max(1, w) : maxWidth)));
   }
 
   /** 倍率を今の zoomMode に合わせる。focus（表示領域内の座標・既定は中央）の点が同じ位置に残るようスクロールを合わせる */
@@ -276,8 +288,11 @@ export class PdfViewer {
     const scale = this.pinchScale;
     this.pinchScale = 0;
     if (this.pinched && scale) {
-      this.zoomMode = scaleToPercent(scale);
-      this.applyScale(); // 百分率に丸めた倍率で描き直す（中央の点は保つ）
+      // 幅合わせ（その場所のページの）まで縮めたら幅合わせに戻す。スマホ用画面ではページごとの幅合わせも戻る
+      const center = this.anchorAtView(this.el.clientWidth / 2, this.el.clientHeight / 2);
+      const fit = this.fitScales(this.pageWidthsAtScale1())[center?.index ?? 0] ?? scale;
+      this.zoomMode = snapsToFit(scale, fit) ? 'fit-width' : scaleToPercent(scale);
+      this.applyScale(); // 決めた倍率で描き直す（中央の点は保つ）
       this.onZoomChange?.(this.zoomMode);
     } else {
       for (const pv of this.pageViews) if (this.isNearViewport(pv)) this.renderPage(pv);
@@ -286,7 +301,7 @@ export class PdfViewer {
 
   // ---- 描画と、その上限 ----
   private isNearViewport(pv: PageView): boolean {
-    const margin = this.el.clientHeight;
+    const margin = this.el.clientHeight * NEAR_VIEWPORTS;
     const rect = pv.el.getBoundingClientRect();
     const root = this.el.getBoundingClientRect();
     return rect.bottom >= root.top - margin && rect.top <= root.bottom + margin;

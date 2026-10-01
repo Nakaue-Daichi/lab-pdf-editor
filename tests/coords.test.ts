@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clientRectsToPdfRects, mergeLineRects, pdfRectToCss, type ViewportLike } from '../src/viewer/coords';
+import { clientRectsToPdfRects, mergeLineRects, pdfPointToPercent, pdfRectToCss, pdfRectToPercent, type ViewportLike } from '../src/viewer/coords';
 
 // scale 2・A4 縦（高さ 842pt）・回転なしの viewport を模した最小実装
 const PAGE_H = 842;
@@ -48,5 +48,39 @@ describe('mergeLineRects', () => {
 describe('pdfRectToCss', () => {
   it('returns normalized left/top/width/height in CSS pixels', () => {
     expect(pdfRectToCss([50, 812, 100, 822], viewport)).toEqual({ left: 100, top: 40, width: 100, height: 20 });
+  });
+});
+
+describe('pdfRectToPercent / pdfPointToPercent', () => {
+  // 上の viewport に寸法（A4 幅 595pt・高さ 842pt の 2 倍）を足したもの
+  const sized = { ...viewport, width: 1190, height: 1684 };
+
+  it('returns the rect as percentages of the page size', () => {
+    const r = pdfRectToPercent([50, 812, 100, 822], sized);
+    expect(r.left).toBeCloseTo((100 / 1190) * 100);
+    expect(r.top).toBeCloseTo((40 / 1684) * 100);
+    expect(r.width).toBeCloseTo((100 / 1190) * 100);
+    expect(r.height).toBeCloseTo((20 / 1684) * 100);
+  });
+
+  it('stays the same when the page is drawn at another scale', () => {
+    const half: ViewportLike & { width: number; height: number } = {
+      convertToPdfPoint: (x, y) => [x, PAGE_H - y],
+      convertToViewportPoint: (x, y) => [x, PAGE_H - y],
+      width: 595,
+      height: 842,
+    };
+    const a = pdfRectToPercent([50, 812, 100, 822], sized);
+    const b = pdfRectToPercent([50, 812, 100, 822], half);
+    expect(b.left).toBeCloseTo(a.left);
+    expect(b.top).toBeCloseTo(a.top);
+    expect(b.width).toBeCloseTo(a.width);
+    expect(b.height).toBeCloseTo(a.height);
+  });
+
+  it('converts a point the same way', () => {
+    const p = pdfPointToPercent([50, 812], sized);
+    expect(p.left).toBeCloseTo((100 / 1190) * 100);
+    expect(p.top).toBeCloseTo((60 / 1684) * 100);
   });
 });
