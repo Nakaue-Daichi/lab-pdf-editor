@@ -1,6 +1,7 @@
 // 操作列。状態は持たず、押されたことを actions で通知する。
 // 画面上部のツールバーと、スマホ用画面の下部バー（よく使う操作を親指の届く位置に置く）の 2 つを持つ。
-// どのボタンをどの幅で出すかは styles.css が決める（data-wide = 1,440px 以上だけ、data-desk = スマホ用画面では隠す）。
+// どのボタンをどの幅で出すかは styles.css が決める（data-wide = 1,440px 以上だけ、data-desk = スマホ用画面では隠す、
+// 「…」の中の data-compact = スマホ用画面だけ、.tb-menu-author = 著者名の欄を出さない幅だけ）。
 import type { ZoomMode } from '../viewer/PdfViewer';
 import { icon } from './icons';
 
@@ -75,10 +76,9 @@ export class Toolbar {
       <details class="tb-menu tb-more" data-role="more">
         <summary class="tb-btn tb-btn-icon" aria-label="その他の操作" title="その他の操作">${icon('ellipsis')}</summary>
         <div class="tb-menu-list">
-          <button type="button" data-act="redo" data-role="redo" data-compact disabled>${icon('redo-2')}やり直す</button>
           <button type="button" data-act="open" data-compact>${icon('folder-open')}PDF を開く</button>
           <button type="button" data-act="sample">${icon('file-text')}サンプルで試す</button>
-          <button type="button" data-act="author-edit" data-compact>${icon('user-round')}<span>著者名<span class="tb-menu-sub" data-role="author-label"></span></span></button>
+          <button type="button" data-act="author-edit" class="tb-menu-author">${icon('user-round')}<span>著者名<span class="tb-menu-sub" data-role="author-label"></span></span></button>
           <button type="button" data-act="fit" data-doc data-compact>${icon('move-horizontal')}幅に合わせる</button>
           <hr />
           <button type="button" data-act="import" data-doc>${icon('import')}コメントを取り込む</button>
@@ -98,6 +98,7 @@ export class Toolbar {
     this.bottomEl.innerHTML = `
       <div class="mb-row mb-tools">
         <button type="button" class="mb-btn" data-act="undo" data-role="undo" disabled>${icon('undo-2')}<span>戻す</span></button>
+        <button type="button" class="mb-btn" data-act="redo" data-role="redo" disabled>${icon('redo-2')}<span>やり直す</span></button>
         <button type="button" class="mb-btn tb-toggle" data-act="note" data-role="note" data-doc>${icon('sticky-note')}<span>付箋</span></button>
         <button type="button" class="mb-btn" data-act="comments" data-role="comments" data-doc aria-expanded="false">${icon('messages-square')}<span>コメント<b class="mb-count" data-role="count">0</b></span></button>
         <button type="button" class="mb-btn mb-btn-primary" data-act="save" data-doc>${icon('download')}<span>保存</span></button>
@@ -229,11 +230,6 @@ export class Toolbar {
   setAuthor(name: string): void {
     if (this.authorInput.value !== name) this.authorInput.value = name;
     this.authorMenuLabel.textContent = name ? `：${name}` : '：未設定';
-  }
-
-  focusAuthor(): void {
-    this.authorInput.focus();
-    this.authorInput.select();
   }
 
   /** ファイルの input を開く（空状態の「PDF を開く」から） */

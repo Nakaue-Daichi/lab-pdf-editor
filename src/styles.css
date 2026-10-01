@@ -54,6 +54,8 @@ body {
   /* スマホのブラウザはアドレスバーの出し入れで高さが変わる。今の高さ（dvh）に合わせる */
   height: 100dvh;
   display: grid;
+  /* 列は画面の幅で打ち止め（auto だとツールバーの最小幅に引っぱられて画面ごと横にはみ出し、ファイル名も縮まない） */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
 }
 .icon {
@@ -269,8 +271,18 @@ summary.tb-btn[disabled] {
   display: grid;
   place-items: center;
 }
-.tb-menu-list [data-compact] {
+.tb-menu-list [data-compact],
+.tb-menu-list .tb-menu-author {
   display: none;
+}
+/* タブレット（指・1,099px 以下）は押せる大きさを確保するとツールバーに収まらないので、著者名の欄を「…」へ */
+@media (max-width: 1099px) and (pointer: coarse) {
+  .tb-author {
+    display: none !important;
+  }
+  .tb-menu-list .tb-menu-author {
+    display: flex;
+  }
 }
 @media (max-width: 1439px) {
   [data-wide] {
@@ -755,6 +767,75 @@ button.link {
   cursor: pointer;
 }
 
+/* ---- ダイアログ（著者名）。画面の上寄りに出し、スマホでキーボードが出ても隠れないように ---- */
+.dlg {
+  width: min(360px, calc(100vw - 32px));
+  margin: 12vh auto auto;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 20px 60px rgba(20, 20, 60, 0.3);
+}
+.dlg::backdrop {
+  background: rgba(20, 20, 40, 0.35);
+}
+.dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+}
+.dlg-title {
+  margin: 0;
+  color: var(--brand);
+  font-size: 17px;
+  font-weight: 700;
+}
+.dlg-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dlg-input {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+.dlg-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(45, 40, 127, 0.15);
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dlg-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dlg-btn-primary {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
 /* ---- 通知 ---- */
 .toast-host {
   position: fixed;
@@ -886,7 +967,8 @@ button.link {
   [data-desk] {
     display: none !important;
   }
-  .tb-menu-list [data-compact] {
+  .tb-menu-list [data-compact],
+  .tb-menu-list .tb-menu-author {
     display: flex;
   }
 
@@ -1027,12 +1109,22 @@ button.link {
     gap: 6px;
     font-size: 15px;
   }
+  /* 幅 360px 未満（iPhone SE 初代など）では 5 つのラベルが収まるよう少し小さく */
+  @media (max-width: 359px) {
+    .mb-tools .mb-btn {
+      font-size: 10px;
+    }
+    .mb-count {
+      margin-left: 2px;
+      padding: 0 3px;
+    }
+  }
   .mb-selecting .mb-btn-wide {
     flex: 0 0 96px;
   }
   .mb-btn-comment {
     flex: 1;
-    margin: 6px 4px;
+    margin: 4px;
     border-radius: 22px;
     background: var(--brand);
     color: #fff;

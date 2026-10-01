@@ -12,6 +12,7 @@ import { readAnnotations, writeAnnotations } from './pdf/annotations';
 import { sha256Hex } from './pdf/hash';
 import { loadPdfDocument, PdfOpenError, type LoadedPdf } from './pdf/loader';
 import { deleteDraft, loadDraft, saveDraft } from './storage/drafts';
+import { askAuthor } from './ui/AuthorDialog';
 import { CommentSheet } from './ui/CommentSheet';
 import { renderEmptyState } from './ui/EmptyState';
 import { Sidebar } from './ui/Sidebar';
@@ -148,22 +149,30 @@ export function startApp(root: HTMLElement): void {
     }
   }
 
-  function ensureAuthor(): boolean {
-    if (store.author) return true;
-    const name = window.prompt('あなたの名前を入れてください（コメントの著者として PDF に記録されます）');
-    if (!name || !name.trim()) {
-      toast('著者名を入れるとコメントを付けられます', 'error');
-      toolbar.focusAuthor();
-      return false;
+  /**
+   * 著者名があれば run をすぐ呼ぶ。無ければ尋ね、決まったら run を呼ぶ（ダイアログの「決定」のタップの中で同期的に。
+   * run の中で入力欄にフォーカスしても iOS がキーボードを出せるように）。
+   */
+  function withAuthor(run: () => void): void {
+    if (store.author) {
+      run();
+      return;
     }
-    setAuthor(name);
-    return true;
+    askAuthor({ current: '', message: 'コメントの著者として PDF に記録されます。この端末のブラウザが覚えます。' }, (name) => {
+      if (!name) {
+        toast('著者名を入れるとコメントを付けられます', 'error');
+        return;
+      }
+      setAuthor(name);
+      run();
+    });
   }
 
-  /** 入力欄の無いスマホ用画面で著者名を変える */
+  /** 著者名を変える（入力欄の無い幅では「…」から） */
   function editAuthor(): void {
-    const name = window.prompt('著者名（コメントの著者として PDF に記録されます）', store.author);
-    if (name !== null) setAuthor(name);
+    askAuthor({ current: store.author, message: 'コメントの著者として PDF に記録されます。' }, (name) => {
+      if (name !== null) setAuthor(name);
+    });
   }
 
   // ---- 文書を開く ----
@@ -328,10 +337,12 @@ export function startApp(root: HTMLElement): void {
   function commentOnSelection(): void {
     const selection = armedSelection ?? pendingSelection;
     armedSelection = null;
-    if (!selection || !ensureAuthor()) return;
-    const c = store.addHighlight(selection);
-    clearTextSelection();
-    openEditor(c.id);
+    if (!selection) return;
+    withAuthor(() => {
+      const c = store.addHighlight(selection);
+      clearTextSelection();
+      openEditor(c.id);
+    });
   }
 
   /**
@@ -354,10 +365,8 @@ export function startApp(root: HTMLElement): void {
   // ---- ページ上のクリック: 付箋を置く／ハイライトを選ぶ ----
   viewer.onPageClick = (pageIndex, point) => {
     if (noteMode) {
-      if (!ensureAuthor()) return;
-      const c = store.addNote({ pageIndex, point });
       setNoteMode(false);
-      openEditor(c.id);
+      withAuthor(() => openEditor(store.addNote({ pageIndex, point }).id));
       return;
     }
     const sel = document.getSelection();
@@ -396,6 +405,8 @@ export function startApp(root: HTMLElement): void {
 
   function setNoteMode(on: boolean): void {
     noteMode = on && current !== null;
+    // スマホ用画面では一覧のシートを閉じて本文を出す（開いたままだと、置きたい場所のタップがシートに吸われる）
+    if (noteMode && sheet.isSheet) sheet.set('closed');
     noteHint.hidden = !noteMode;
     viewer.el.classList.toggle('note-mode', noteMode);
     toolbar.setNoteMode(noteMode);
