@@ -1,5 +1,6 @@
 // 1 ページ分の描画: キャンバス（PDF.js）＋文字層（選択用）＋オーバーレイ（ハイライト・付箋アイコン）。
 import { AnnotationMode, TextLayer, type PDFPageProxy, type PageViewport, type RenderTask } from 'pdfjs-dist';
+import { attachSelectionAssist, detachSelectionAssist } from './textSelectionAssist';
 
 export class PageView {
   readonly el: HTMLDivElement;
@@ -96,15 +97,18 @@ export class PageView {
       throw err;
     }
 
+    detachSelectionAssist(this.textLayerEl);
     this.textLayerEl.replaceChildren();
     this.textLayer = new TextLayer({ textContentSource: this.page.streamTextContent(), container: this.textLayerEl, viewport });
     await this.textLayer.render();
+    attachSelectionAssist(this.textLayerEl);
     this.renderedScale = viewport.scale;
   }
 
   destroy(): void {
     this.renderTask?.cancel();
     this.textLayer?.cancel();
+    detachSelectionAssist(this.textLayerEl);
     this.el.remove();
   }
 }

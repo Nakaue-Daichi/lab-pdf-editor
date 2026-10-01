@@ -393,6 +393,50 @@ summary.tb-btn[disabled] {
 .pv-select-btn:hover {
   background: var(--brand-ink);
 }
+/* 指で選んだとき（iPad 等）は選択のそばに浮かせず、本文の下端中央に出す（OS の選択メニューとぶつけない） */
+.pv-select-btn.is-docked {
+  left: 50%;
+  top: auto;
+  bottom: calc(24px + var(--safe-b) + var(--kb, 0px));
+  min-height: 48px;
+  padding: 0 24px;
+  border-radius: 24px;
+  font-size: 16px;
+  transform: translateX(-50%);
+}
+/* 付箋モードの案内 */
+.pv-note-hint {
+  position: absolute;
+  z-index: 25;
+  top: 10px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 5px 5px 14px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+  transform: translateX(-50%);
+}
+.pv-note-hint button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .pv-note-hint button {
+    min-height: 36px;
+  }
+}
 
 /* ---- サイドバー ---- */
 .sb {
@@ -711,6 +755,28 @@ button.link {
 .toast-error {
   background: var(--danger);
 }
+.toast-action {
+  margin-left: 12px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 6px;
+  background: none;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .toast {
+    display: flex;
+    align-items: center;
+  }
+  .toast-action {
+    min-height: 40px;
+    margin: -6px -6px -6px 12px;
+    padding: 0 14px;
+  }
+}
 .toast.is-leaving {
   opacity: 0;
   transform: translateY(6px);
@@ -978,8 +1044,24 @@ button.link {
     transition-duration: 0.2s;
     transition-timing-function: var(--ease-exit);
   }
+  .sb.is-dragging {
+    transition: none;
+  }
+  /* 入力中: 下部バーを隠し、シートを全高にしてキーボードの上に載せる（--kb は src/ui/viewport.ts が置く） */
+  .app.is-typing {
+    grid-template-rows: calc(var(--toolbar-h) + var(--safe-t)) minmax(0, 1fr) 0;
+  }
+  .app.is-typing .mb {
+    display: none;
+  }
+  .app.is-typing .sb {
+    bottom: var(--kb, 0px);
+    height: calc(var(--vvh, 100dvh) - var(--toolbar-h) - var(--safe-t));
+  }
   .sb-head {
     padding: 0 6px 8px 16px;
+    /* 見出しのドラッグでシートの高さを変える（ブラウザのスクロールに取られないように） */
+    touch-action: none;
   }
   .sb-grabber {
     display: block;

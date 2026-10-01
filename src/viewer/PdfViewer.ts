@@ -112,12 +112,30 @@ export class PdfViewer {
     for (const pv of this.pageViews) this.paintOverlay(pv);
   }
 
-  scrollToComment(comment: Comment): void {
+  /** コメントの場所へ送る。topFraction = 表示領域の上から何割の位置に出すか */
+  scrollToComment(comment: Comment, topFraction = 0.3): void {
     const pv = this.pageViews[comment.pageIndex];
     if (!pv) return;
     const css = pdfRectToCss(anchorRect(comment.anchor), pv.viewport);
-    const top = pv.el.offsetTop + css.top - this.el.clientHeight * 0.3;
+    const top = pv.el.offsetTop + css.top - this.el.clientHeight * topFraction;
     this.el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+
+  /** コメントの場所が下から bottomInset px（シートなど）に隠れる、または上にはみ出すなら、見える位置まで送る */
+  ensureVisible(comment: Comment, bottomInset: number): void {
+    const pv = this.pageViews[comment.pageIndex];
+    if (!pv) return;
+    const css = pdfRectToCss(anchorRect(comment.anchor), pv.viewport);
+    const top = pv.el.offsetTop + css.top - this.el.scrollTop;
+    const bottom = top + Math.max(css.height, 24);
+    const visibleBottom = this.el.clientHeight - bottomInset - 12;
+    if (top >= 8 && bottom <= visibleBottom) return;
+    this.scrollToComment(comment, 0.2);
+  }
+
+  /** そのページの今の倍率（PDF の 1pt が何 CSS px か） */
+  scaleOf(pageIndex: number): number {
+    return this.pageViews[pageIndex]?.viewport.scale ?? 1;
   }
 
   pageViewFor(el: Element): PageView | undefined {

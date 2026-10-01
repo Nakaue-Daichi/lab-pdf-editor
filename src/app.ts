@@ -6,6 +6,7 @@ import { markdownFileName, reviewedFileName } from './export/filenames';
 import { toMarkdown } from './export/markdown';
 import { mergeComments } from './model/merge';
 import { ReviewStore } from './model/store';
+import type { Comment } from './model/types';
 import { readAnnotations, writeAnnotations } from './pdf/annotations';
 import { sha256Hex } from './pdf/hash';
 import { loadPdfDocument, PdfOpenError, type LoadedPdf } from './pdf/loader';
@@ -15,13 +16,17 @@ import { renderEmptyState } from './ui/EmptyState';
 import { Sidebar } from './ui/Sidebar';
 import { toast } from './ui/toast';
 import { Toolbar } from './ui/Toolbar';
-import { isCompact, onCompactChange, trackVisualViewport } from './ui/viewport';
+import { isCompact, lastInputWasTouch, onCompactChange, trackVisualViewport } from './ui/viewport';
 import { hitTestHighlight } from './viewer/hittest';
 import { PdfViewer } from './viewer/PdfViewer';
 import { watchTextSelection, type TextSelection } from './viewer/selection';
 
 const AUTHOR_KEY = 'lab-pdf-editor.author';
 const DRAFT_DEBOUNCE_MS = 500;
+/** 指で押したときにハイライトを拾う範囲（CSS px） */
+const TOUCH_HIT_PX = 12;
+/** 指で押したとき、選択が消えた通知のあとも「＋ コメント」を残しておく時間（iOS はタップで選択が先に消える） */
+const SELECTION_HOLD_MS = 400;
 
 interface OpenDocument {
   bytes: Uint8Array;
@@ -94,9 +99,16 @@ export function startApp(root: HTMLElement): void {
     openSample: () => void openSample(),
     pickFile: () => toolbar.pickFile(),
   });
-  const sidebar = new Sidebar(main, store, { onJump: (c) => viewer.scrollToComment(c) });
-  const sheet = new CommentSheet(app, sidebar.el);
+  const sidebar = new Sidebar(main, store, { onJump: (c) => jumpToComment(c) });
+  const sheet = new CommentSheet(app, sidebar.el, toolbar.el);
   sheet.onChange((state, compact) => toolbar.setCommentsOpen(compact && state !== 'closed'));
+  // 新しいコメントに何も書かずに閉じたら、残したことを知らせて取り消せるようにする
+  sheet.onComposeEnd = (id) => {
+    const c = store.find(id);
+    if (!c || c.text.trim() !== '') return;
+    const message = c.anchor.kind === 'highlight' ? 'ハイライトだけ残しました' : '空の付箋を残しました';
+    toast(message, 'info', 5000, { label: '取り消す', run: () => store.removeComment(id) });
+  };
 
   const selectButton = document.createElement('button');
   selectButton.type = 'button';
@@ -104,6 +116,14 @@ export function startApp(root: HTMLElement): void {
   selectButton.textContent = '＋ コメント';
   selectButton.hidden = true;
   document.body.append(selectButton);
+
+  // 付箋モードの案内（本文の上端）
+  const noteHint = document.createElement('div');
+  noteHint.className = 'pv-note-hint';
+  noteHint.hidden = true;
+  noteHint.innerHTML = `<span><span class="for-mouse">付箋を置く場所をクリック</span><span class="for-touch">付箋を置く場所をタップ</span></span><button type="button" data-act="note-cancel">やめる</button>`;
+  noteHint.querySelector('button')!.addEventListener('click', () => setNoteMode(false));
+  viewerWrap.append(noteHint);
 
   // ---- 著者名 ----
   try {
@@ -233,40 +253,96 @@ export function startApp(root: HTMLElement): void {
   }
 
   // ---- 文字選択 → ハイライト ----
+  // マウスで選んだら「＋ コメント」を選択のそばに出す（今まで通り）。指で選んだら選択のそばには出さない
+  // （OS の選択メニューとぶつかる）: スマホ用画面は下部バーを「解除／＋ コメント」に差し替え、iPad 等は本文の下端中央に出す。
+  // iOS は選択の外のボタンをタップすると click の前に選択が消えるので、確定した選択を持っておき、
+  // ボタンを押し始めた時点（pointerdown）の値で作る。選択が消えた通知のあとも少しの間はボタンを残す。
+  let armedSelection: TextSelection | null = null;
+  let hideSelectionTimer = 0;
   watchTextSelection(
     viewer.el,
     (el) => viewer.pageViewFor(el),
     (selection) => {
-      pendingSelection = selection;
-      if (!selection) {
-        selectButton.hidden = true;
+      window.clearTimeout(hideSelectionTimer);
+      if (selection) {
+        pendingSelection = selection;
+        showSelectionAction(selection);
         return;
       }
-      const { lastRect } = selection;
-      selectButton.hidden = false;
-      const width = selectButton.offsetWidth || 110;
-      const left = Math.min(lastRect.right + 8, window.innerWidth - width - 8);
-      const top = lastRect.top - 38 >= 0 ? lastRect.top - 38 : lastRect.bottom + 8;
-      selectButton.style.left = `${Math.max(8, left)}px`;
-      selectButton.style.top = `${top}px`;
+      if (!pendingSelection) return;
+      hideSelectionTimer = window.setTimeout(
+        () => {
+          pendingSelection = null;
+          hideSelectionAction();
+        },
+        lastInputWasTouch() ? SELECTION_HOLD_MS : 0,
+      );
     },
   );
+
+  function showSelectionAction(selection: TextSelection): void {
+    const touch = lastInputWasTouch();
+    if (touch && sheet.isSheet) {
+      selectButton.hidden = true;
+      toolbar.setSelecting(true);
+      return;
+    }
+    toolbar.setSelecting(false);
+    selectButton.hidden = false;
+    selectButton.classList.toggle('is-docked', touch);
+    if (touch) {
+      selectButton.style.left = '';
+      selectButton.style.top = '';
+      return;
+    }
+    const { lastRect } = selection;
+    const width = selectButton.offsetWidth || 110;
+    const left = Math.min(lastRect.right + 8, window.innerWidth - width - 8);
+    const top = lastRect.top - 38 >= 0 ? lastRect.top - 38 : lastRect.bottom + 8;
+    selectButton.style.left = `${Math.max(8, left)}px`;
+    selectButton.style.top = `${top}px`;
+  }
+
+  function hideSelectionAction(): void {
+    selectButton.hidden = true;
+    toolbar.setSelecting(false);
+  }
+
+  const armSelection = (): void => {
+    armedSelection = pendingSelection;
+  };
+  selectButton.addEventListener('pointerdown', armSelection);
+  toolbar.bottomEl.addEventListener('pointerdown', (event) => {
+    if ((event.target as Element).closest('[data-act="sel-comment"]')) armSelection();
+  });
   selectButton.addEventListener('mousedown', (event) => event.preventDefault()); // 押しても選択を消さない
   selectButton.addEventListener('click', () => commentOnSelection());
 
   /** 選んでいる文字列にハイライトとコメントを付け、入力欄にフォーカスする */
   function commentOnSelection(): void {
-    if (!pendingSelection || !ensureAuthor()) return;
-    const c = store.addHighlight(pendingSelection);
+    const selection = armedSelection ?? pendingSelection;
+    armedSelection = null;
+    if (!selection || !ensureAuthor()) return;
+    const c = store.addHighlight(selection);
     clearTextSelection();
-    sidebar.focusComment(c.id);
+    openEditor(c.id);
+  }
+
+  /**
+   * 新しいコメントの入力欄を開く。スマホ用画面ではシートを全高にしてから。
+   * iOS はタップの処理の中で同期的に focus しないとキーボードを出さないので、await を挟まずに呼ぶ。
+   */
+  function openEditor(id: string): void {
+    sheet.beginCompose(id);
+    sidebar.focusComment(id);
   }
 
   function clearTextSelection(): void {
-    document.getSelection()?.removeAllRanges();
+    window.clearTimeout(hideSelectionTimer);
     pendingSelection = null;
-    selectButton.hidden = true;
-    toolbar.setSelecting(false);
+    armedSelection = null;
+    document.getSelection()?.removeAllRanges();
+    hideSelectionAction();
   }
 
   // ---- ページ上のクリック: 付箋を置く／ハイライトを選ぶ ----
@@ -275,18 +351,43 @@ export function startApp(root: HTMLElement): void {
       if (!ensureAuthor()) return;
       const c = store.addNote({ pageIndex, point });
       setNoteMode(false);
-      sidebar.focusComment(c.id);
+      openEditor(c.id);
       return;
     }
     const sel = document.getSelection();
     if (sel && !sel.isCollapsed) return; // 選択直後のクリックは無視
-    const hit = hitTestHighlight(store.comments, pageIndex, point);
+    // 指は細い行のハイライトに当てにくいので、近くも拾う（PDF の pt に直して渡す）
+    const tolerance = lastInputWasTouch() ? TOUCH_HIT_PX / viewer.scaleOf(pageIndex) : 0;
+    const hit = hitTestHighlight(store.comments, pageIndex, point, tolerance);
     store.select(hit ? hit.id : null);
+    if (hit) revealInList(hit);
   };
-  viewer.onSelectNote = (id) => store.select(id);
+  viewer.onSelectNote = (id) => {
+    store.select(id);
+    const c = store.find(id);
+    if (c) revealInList(c);
+  };
+
+  /** 本文で選んだコメントを一覧に出す。スマホ用画面ではシートを半分で開き、選んだ場所がシートに隠れるなら本文を送る */
+  function revealInList(c: Comment): void {
+    if (!sheet.isSheet) return;
+    sheet.reveal('half');
+    viewer.ensureVisible(c, viewer.el.clientHeight * 0.5);
+  }
+
+  /** 一覧のカードから本文の場所へ移る。スマホ用画面では全高のシートを半分に下げ、見えている部分の上の方に出す */
+  function jumpToComment(c: Comment): void {
+    if (!sheet.isSheet) {
+      viewer.scrollToComment(c);
+      return;
+    }
+    if (sheet.current === 'full') sheet.set('half');
+    viewer.scrollToComment(c, 0.2);
+  }
 
   function setNoteMode(on: boolean): void {
     noteMode = on && current !== null;
+    noteHint.hidden = !noteMode;
     viewer.el.classList.toggle('note-mode', noteMode);
     toolbar.setNoteMode(noteMode);
   }
